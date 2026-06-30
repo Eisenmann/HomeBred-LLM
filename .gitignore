@@ -1,0 +1,35 @@
+# Build output
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+.vs/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+!**/packages/repositories.config
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Rider / JetBrains
+.idea/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local model files (large binaries — store outside repo)
+*.gguf
+*.bin
+*.ggml

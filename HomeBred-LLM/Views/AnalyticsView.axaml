@@ -1,0 +1,167 @@
+<UserControl x:Class="HomebredLLM.Views.AnalyticsView"
+             xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:lvc="using:LiveChartsCore.SkiaSharpView.Avalonia">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="24">
+            <TextBlock Text="Analytics" Classes="section-header" />
+
+            <!-- ── Header: model selector + live gauges ───────────────── -->
+            <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,16">
+
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,20,0">
+                    <TextBlock Text="Model" Classes="label" />
+                    <ComboBox ItemsSource="{Binding Models}"
+                              SelectedItem="{Binding SelectedModel}"
+                              DisplayMemberBinding="{Binding Name}"
+                              MinWidth="200" />
+                </StackPanel>
+
+                <!-- Live gauges -->
+                <UniformGrid Grid.Column="1" Rows="1" Columns="4">
+                    <Border Classes="card" Margin="4,0">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="GPU" Classes="label" HorizontalAlignment="Center" />
+                            <TextBlock HorizontalAlignment="Center"
+                                       FontSize="22" FontWeight="Bold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="{Binding LiveGpuPct, StringFormat='{}{0:F0}%'}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Classes="card" Margin="4,0">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="CPU" Classes="label" HorizontalAlignment="Center" />
+                            <TextBlock HorizontalAlignment="Center"
+                                       FontSize="22" FontWeight="Bold"
+                                       Foreground="{StaticResource WarningBrush}"
+                                       Text="{Binding LiveCpuPct, StringFormat='{}{0:F0}%'}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Classes="card" Margin="4,0">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="RAM" Classes="label" HorizontalAlignment="Center" />
+                            <TextBlock HorizontalAlignment="Center"
+                                       FontSize="22" FontWeight="Bold"
+                                       Foreground="{StaticResource SuccessBrush}"
+                                       Text="{Binding LiveRamMb, StringFormat='{}{0:F0} MB'}" />
+                        </StackPanel>
+                    </Border>
+                    <Border Classes="card" Margin="4,0">
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="GPU Temp" Classes="label" HorizontalAlignment="Center" />
+                            <TextBlock HorizontalAlignment="Center"
+                                       FontSize="22" FontWeight="Bold"
+                                       Foreground="{StaticResource DangerBrush}"
+                                       Text="{Binding LiveGpuTempC, StringFormat='{}{0:F0} °C'}" />
+                        </StackPanel>
+                    </Border>
+                </UniformGrid>
+            </Grid>
+
+            <!-- ── Summary cards ──────────────────────────────────────── -->
+            <UniformGrid Rows="1" Columns="5" Margin="0,0,0,16">
+                <Border Classes="card" Margin="0,0,8,0">
+                    <StackPanel>
+                        <TextBlock Text="Avg GPU Util" Classes="label" />
+                        <TextBlock Text="{Binding AvgGpuUtil}"
+                                   FontSize="20" FontWeight="Bold"
+                                   Foreground="{StaticResource AccentBrush}" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="card" Margin="0,0,8,0">
+                    <StackPanel>
+                        <TextBlock Text="Peak VRAM" Classes="label" />
+                        <TextBlock Text="{Binding PeakVram}"
+                                   FontSize="20" FontWeight="Bold"
+                                   Foreground="{StaticResource TextPrimaryBrush}" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="card" Margin="0,0,8,0">
+                    <StackPanel>
+                        <TextBlock Text="Avg TPS" Classes="label" />
+                        <TextBlock Text="{Binding AvgTps}"
+                                   FontSize="20" FontWeight="Bold"
+                                   Foreground="{StaticResource SuccessBrush}" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="card" Margin="0,0,8,0">
+                    <StackPanel>
+                        <TextBlock Text="Avg TTFT" Classes="label" />
+                        <TextBlock Text="{Binding AvgTtft}"
+                                   FontSize="20" FontWeight="Bold"
+                                   Foreground="{StaticResource WarningBrush}" />
+                    </StackPanel>
+                </Border>
+                <Border Classes="card">
+                    <StackPanel>
+                        <TextBlock Text="Total Tokens" Classes="label" />
+                        <TextBlock Text="{Binding TotalTokens}"
+                                   FontSize="20" FontWeight="Bold"
+                                   Foreground="{StaticResource TextPrimaryBrush}" />
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+
+            <!-- ── Date range + delete ────────────────────────────────── -->
+            <Border Classes="card" Margin="0,0,0,16">
+                <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto,Auto">
+                    <TextBlock Grid.Column="0" Text="From"
+                               Classes="label" VerticalAlignment="Center"
+                               Margin="0,0,8,0" />
+                    <CalendarDatePicker Grid.Column="1"
+                                        SelectedDate="{Binding FromDate}"
+                                        Margin="0,0,16,0" />
+                    <TextBlock Grid.Column="2" Text="To"
+                               Classes="label" VerticalAlignment="Center"
+                               Margin="0,0,8,0" />
+                    <CalendarDatePicker Grid.Column="3"
+                                        SelectedDate="{Binding ToDate}"
+                                        Margin="0,0,16,0" />
+                    <Button Grid.Column="4"
+                            Content="🔄 Refresh"
+                            Classes="ghost"
+                            Command="{Binding RefreshCommand}"
+                            Margin="0,0,8,0" />
+                    <TextBlock Grid.Column="5" />
+                    <Button Grid.Column="6"
+                            Content="🗑 Delete Analytics"
+                            Classes="danger"
+                            Command="{Binding DeleteMetricsCommand}"
+                            Margin="0,0,8,0" />
+                    <TextBlock Grid.Column="7"
+                               Text="{Binding DeleteStatus}"
+                               Foreground="{StaticResource SuccessBrush}"
+                               VerticalAlignment="Center"
+                               FontSize="12" />
+                </Grid>
+            </Border>
+
+            <!-- ── Charts ─────────────────────────────────────────────── -->
+            <Border Classes="card" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="GPU Utilization (%)" Classes="label" Margin="0,0,0,8" />
+                    <lvc:CartesianChart Series="{Binding GpuSeries}" Height="160" />
+                </StackPanel>
+            </Border>
+            <Border Classes="card" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="GPU Memory (MB)" Classes="label" Margin="0,0,0,8" />
+                    <lvc:CartesianChart Series="{Binding VramSeries}" Height="160" />
+                </StackPanel>
+            </Border>
+            <Border Classes="card" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="Tokens / Second" Classes="label" Margin="0,0,0,8" />
+                    <lvc:CartesianChart Series="{Binding TpsSeries}" Height="160" />
+                </StackPanel>
+            </Border>
+            <Border Classes="card">
+                <StackPanel>
+                    <TextBlock Text="CPU Utilization (%)" Classes="label" Margin="0,0,0,8" />
+                    <lvc:CartesianChart Series="{Binding CpuSeries}" Height="140" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

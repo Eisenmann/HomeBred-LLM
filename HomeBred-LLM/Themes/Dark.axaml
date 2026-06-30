@@ -1,0 +1,167 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Styles.Resources>
+        <!-- Brushes -->
+        <SolidColorBrush x:Key="BgDeepBrush"      Color="#0A0E14" />
+        <SolidColorBrush x:Key="BgPanelBrush"     Color="#111827" />
+        <SolidColorBrush x:Key="BgCardBrush"      Color="#1F2937" />
+        <SolidColorBrush x:Key="BgInputBrush"     Color="#374151" />
+        <SolidColorBrush x:Key="BorderBrush"      Color="#374151" />
+        <SolidColorBrush x:Key="TextPrimaryBrush"   Color="#F9FAFB" />
+        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#9CA3AF" />
+        <SolidColorBrush x:Key="TextMutedBrush"     Color="#6B7280" />
+        <SolidColorBrush x:Key="AccentBrush"      Color="#0EA5E9" />
+        <SolidColorBrush x:Key="SuccessBrush"     Color="#10B981" />
+        <SolidColorBrush x:Key="WarningBrush"     Color="#F59E0B" />
+        <SolidColorBrush x:Key="DangerBrush"      Color="#EF4444" />
+    </Styles.Resources>
+
+    <!-- Window -->
+    <Style Selector="Window">
+        <Setter Property="Background" Value="{StaticResource BgDeepBrush}" />
+        <Setter Property="FontFamily"
+                Value="Segoe UI,Helvetica Neue,Arial,sans-serif" />
+        <Setter Property="FontSize" Value="13" />
+    </Style>
+
+    <!-- TextBlock defaults -->
+    <Style Selector="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    </Style>
+    <Style Selector="TextBlock.section-header">
+        <Setter Property="FontSize" Value="18" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Margin" Value="0,0,0,12" />
+    </Style>
+    <Style Selector="TextBlock.label">
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Margin" Value="0,0,0,4" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+        <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+        <Setter Property="FontSize" Value="11" />
+    </Style>
+
+    <!-- Border.card -->
+    <Style Selector="Border.card">
+        <Setter Property="Background" Value="{StaticResource BgCardBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="16" />
+    </Style>
+
+    <!-- Buttons -->
+    <Style Selector="Button">
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Padding" Value="14,7" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="CornerRadius" Value="6" />
+    </Style>
+
+    <Style Selector="Button.accent">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.accent:pointerover /template/ ContentPresenter">
+        <Setter Property="Opacity" Value="0.85" />
+    </Style>
+    <Style Selector="Button.accent:disabled /template/ ContentPresenter">
+        <Setter Property="Opacity" Value="0.4" />
+    </Style>
+
+    <Style Selector="Button.danger">
+        <Setter Property="Background" Value="#7F1D1D" />
+        <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+    </Style>
+    <Style Selector="Button.danger:pointerover /template/ ContentPresenter">
+        <Setter Property="Opacity" Value="0.85" />
+    </Style>
+
+    <Style Selector="Button.ghost">
+        <Setter Property="Background" Value="{StaticResource BgCardBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+    </Style>
+    <Style Selector="Button.ghost:pointerover /template/ ContentPresenter">
+        <Setter Property="Opacity" Value="0.85" />
+    </Style>
+
+    <!-- TextBox -->
+    <Style Selector="TextBox">
+        <Setter Property="Background" Value="{StaticResource BgInputBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="8,6" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="CaretBrush" Value="{StaticResource AccentBrush}" />
+    </Style>
+    <Style Selector="TextBox:focus">
+        <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+    </Style>
+
+    <!-- ComboBox -->
+    <Style Selector="ComboBox">
+        <Setter Property="Background" Value="{StaticResource BgInputBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="8,6" />
+        <Setter Property="MinHeight" Value="0" />
+    </Style>
+    <Style Selector="ComboBoxItem">
+        <Setter Property="Background" Value="{StaticResource BgCardBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+    </Style>
+
+    <!-- ListBox -->
+    <Style Selector="ListBox">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="ListBoxItem">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource BgCardBrush}" />
+    </Style>
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+    </Style>
+    <Style Selector="ListBoxItem:selected TextBlock">
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+
+    <!-- Slider -->
+    <Style Selector="Slider">
+        <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+    </Style>
+
+    <!-- ProgressBar -->
+    <Style Selector="ProgressBar">
+        <Setter Property="Background" Value="{StaticResource BgInputBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+        <Setter Property="Height" Value="6" />
+        <Setter Property="CornerRadius" Value="3" />
+    </Style>
+
+    <!-- CalendarDatePicker -->
+    <Style Selector="CalendarDatePicker">
+        <Setter Property="Background" Value="{StaticResource BgInputBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="8,6" />
+    </Style>
+
+</Styles>

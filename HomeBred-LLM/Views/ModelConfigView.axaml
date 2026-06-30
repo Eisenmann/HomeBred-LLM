@@ -1,0 +1,106 @@
+<UserControl x:Class="HomebredLLM.Views.ModelConfigView"
+             xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="24" MaxWidth="680">
+            <TextBlock Classes="section-header">
+                <Run Text="Configure — " />
+                <Run Text="{Binding Model.Name, FallbackValue='Model'}" />
+            </TextBlock>
+
+            <Border Classes="card">
+                <StackPanel>
+                    <!-- Context size -->
+                    <TextBlock Text="Context Size (tokens)" Classes="label" />
+                    <Grid ColumnDefinitions="*,60" Margin="0,0,0,12">
+                        <Slider Grid.Column="0"
+                                Minimum="512" Maximum="131072"
+                                Value="{Binding Config.ContextSize, Mode=TwoWay}"
+                                TickFrequency="512"
+                                VerticalAlignment="Center" Margin="0,0,10,0" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding Config.ContextSize}" />
+                    </Grid>
+
+                    <!-- Temperature -->
+                    <TextBlock Text="Temperature" Classes="label" />
+                    <Grid ColumnDefinitions="*,60" Margin="0,0,0,12">
+                        <Slider Grid.Column="0"
+                                Minimum="0" Maximum="2" TickFrequency="0.05"
+                                Value="{Binding Config.Temperature, Mode=TwoWay}"
+                                VerticalAlignment="Center" Margin="0,0,10,0" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding Config.Temperature, StringFormat='{}{0:F2}'}" />
+                    </Grid>
+
+                    <!-- Top P -->
+                    <TextBlock Text="Top P" Classes="label" />
+                    <Grid ColumnDefinitions="*,60" Margin="0,0,0,12">
+                        <Slider Grid.Column="0"
+                                Minimum="0" Maximum="1" TickFrequency="0.05"
+                                Value="{Binding Config.TopP, Mode=TwoWay}"
+                                VerticalAlignment="Center" Margin="0,0,10,0" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding Config.TopP, StringFormat='{}{0:F2}'}" />
+                    </Grid>
+
+                    <!-- Top K -->
+                    <TextBlock Text="Top K" Classes="label" />
+                    <TextBox Text="{Binding Config.TopK}" Margin="0,0,0,12" />
+
+                    <!-- Repeat Penalty -->
+                    <TextBlock Text="Repeat Penalty" Classes="label" />
+                    <Grid ColumnDefinitions="*,60" Margin="0,0,0,12">
+                        <Slider Grid.Column="0"
+                                Minimum="1" Maximum="2" TickFrequency="0.05"
+                                Value="{Binding Config.RepeatPenalty, Mode=TwoWay}"
+                                VerticalAlignment="Center" Margin="0,0,10,0" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding Config.RepeatPenalty, StringFormat='{}{0:F2}'}" />
+                    </Grid>
+
+                    <!-- GPU Layers -->
+                    <TextBlock Text="GPU Layer Count  (−1 = all on GPU)" Classes="label" />
+                    <TextBox Text="{Binding Config.GpuLayerCount}" Margin="0,0,0,12" />
+
+                    <!-- Threads -->
+                    <TextBlock Text="CPU Threads" Classes="label" />
+                    <TextBox Text="{Binding Config.ThreadCount}" Margin="0,0,0,12" />
+
+                    <!-- Batch Size -->
+                    <TextBlock Text="Batch Size" Classes="label" />
+                    <TextBox Text="{Binding Config.BatchSize}" Margin="0,0,0,12" />
+
+                    <!-- Max Tokens -->
+                    <TextBlock Text="Max Output Tokens" Classes="label" />
+                    <TextBox Text="{Binding Config.MaxTokens}" Margin="0,0,0,12" />
+
+                    <!-- System Prompt -->
+                    <TextBlock Text="System Prompt" Classes="label" />
+                    <TextBox Text="{Binding Config.SystemPrompt}"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             Height="80"
+                             Margin="0,0,0,16"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto" />
+
+                    <!-- Buttons -->
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="💾 Save"
+                                Classes="accent"
+                                Command="{Binding SaveCommand}"
+                                Margin="0,0,8,0" />
+                        <Button Content="↺ Reset Defaults"
+                                Classes="ghost"
+                                Command="{Binding ResetDefaultsCommand}" />
+                        <TextBlock Text="{Binding SaveStatus}"
+                                   Foreground="{StaticResource SuccessBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="12,0,0,0" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

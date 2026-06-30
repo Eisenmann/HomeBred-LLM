@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <AssemblyName>HomeBred-LLM</AssemblyName>
+    <RootNamespace>HomebredLLM</RootNamespace>
+    <!-- Suppress CA1416 platform-compatibility warnings for guarded platform calls -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Inference engine — LLamaSharp with CUDA 12 and CPU fallback -->
+    <PackageReference Include="LLamaSharp" Version="0.17.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cuda12" Version="0.17.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.17.0" />
+
+    <!-- Database -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.8" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.8">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
+
+    <!-- MVVM -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+
+    <!-- DI + Hosting -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+
+    <!-- Avalonia UI -->
+    <PackageReference Include="Avalonia" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.2.3"
+                      Condition="'$(Configuration)' == 'Debug'" />
+
+    <!-- Charts (Avalonia backend) -->
+    <PackageReference Include="LiveChartsCore.SkiaSharpView.Avalonia" Version="2.0.0-rc4" />
+
+    <!-- Windows PerformanceCounter (guarded by RuntimeInformation, needed for net8.0 TFM) -->
+    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

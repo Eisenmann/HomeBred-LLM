@@ -1,0 +1,95 @@
+<Window x:Class="HomebredLLM.MainWindow"
+        xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HomebredLLM.ViewModels"
+        xmlns:views="using:HomebredLLM.Views"
+        Title="HomeBred-LLM" Height="820" Width="1280"
+        MinHeight="600" MinWidth="900"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BgDeepBrush}">
+
+    <Grid ColumnDefinitions="200,*">
+
+        <!-- ── Sidebar ──────────────────────────────────────────────────── -->
+        <Border Grid.Column="0"
+                Background="{StaticResource BgPanelBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="0,0,1,0">
+            <DockPanel>
+
+                <!-- Logo -->
+                <Border DockPanel.Dock="Top" Padding="16,20,16,12"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="0,0,0,1">
+                    <StackPanel>
+                        <TextBlock Text="HomeBred-LLM"
+                                   FontSize="16" FontWeight="Bold"
+                                   Foreground="{StaticResource TextPrimaryBrush}" />
+                        <TextBlock Text="Local AI Platform"
+                                   Classes="muted" Margin="0,2,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Nav buttons -->
+                <StackPanel DockPanel.Dock="Top" Margin="8,12">
+                    <Button Content="📦  Models"
+                            Classes="ghost"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Margin="0,0,0,4"
+                            Command="{Binding NavigateToCommand}"
+                            CommandParameter="Models" />
+                    <Button Content="💬  Chat"
+                            Classes="ghost"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Margin="0,0,0,4"
+                            Command="{Binding NavigateToCommand}"
+                            CommandParameter="Chat" />
+                    <Button Content="📊  Analytics"
+                            Classes="ghost"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Margin="0,0,0,4"
+                            Command="{Binding NavigateToCommand}"
+                            CommandParameter="Analytics" />
+                    <Button Content="⚙  Config"
+                            Classes="ghost"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Command="{Binding NavigateToCommand}"
+                            CommandParameter="Config" />
+                </StackPanel>
+
+                <!-- Status bar -->
+                <Border DockPanel.Dock="Bottom" Padding="12,8"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="0,1,0,0">
+                    <TextBlock Text="{Binding StatusMessage}"
+                               Classes="muted"
+                               TextTrimming="CharacterEllipsis" />
+                </Border>
+
+            </DockPanel>
+        </Border>
+
+        <!-- ── Content area — DataTemplate picks the right view ─────────── -->
+        <ContentControl Grid.Column="1" Content="{Binding CurrentView}">
+            <ContentControl.DataTemplates>
+                <DataTemplate DataType="{x:Type vm:ModelLibraryViewModel}">
+                    <views:ModelLibraryView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:ChatViewModel}">
+                    <views:ChatView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:AnalyticsViewModel}">
+                    <views:AnalyticsView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:ModelConfigViewModel}">
+                    <views:ModelConfigView />
+                </DataTemplate>
+            </ContentControl.DataTemplates>
+        </ContentControl>
+
+    </Grid>
+</Window>

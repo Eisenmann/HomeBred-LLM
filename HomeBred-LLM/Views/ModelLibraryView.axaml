@@ -1,0 +1,203 @@
+<UserControl x:Class="HomebredLLM.Views.ModelLibraryView"
+             xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:conv="using:HomebredLLM.Converters">
+
+    <UserControl.Resources>
+        <conv:StatusToColorConverter x:Key="StatusColor" />
+        <conv:BytesToReadableConverter x:Key="Bytes" />
+        <conv:BoolToVisibilityConverter x:Key="BoolVis" />
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="24">
+            <TextBlock Text="Model Library" Classes="section-header" />
+
+            <!-- ── Local models ─────────────────────────────────────────── -->
+            <Border Classes="card" Margin="0,0,0,20">
+                <StackPanel>
+                    <TextBlock Text="Local Models"
+                               FontSize="14" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               Margin="0,0,0,12" />
+
+                    <TextBlock Text="No models downloaded yet."
+                               Classes="muted"
+                               IsVisible="{Binding LocalModels.Count,
+                                   Converter={StaticResource BoolVis},
+                                   ConverterParameter=inverse}" />
+
+                    <ItemsControl ItemsSource="{Binding LocalModels}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{StaticResource BgPanelBrush}"
+                                        BorderBrush="{StaticResource BorderBrush}"
+                                        BorderThickness="1" CornerRadius="8"
+                                        Padding="12,10" Margin="0,0,0,6">
+                                    <Grid ColumnDefinitions="*,Auto">
+
+                                        <!-- Info -->
+                                        <StackPanel Grid.Column="0">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Name}"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{StaticResource TextPrimaryBrush}" />
+                                                <Border Background="{Binding Status, Converter={StaticResource StatusColor}}"
+                                                        CornerRadius="4" Padding="5,1" Margin="8,0,0,0">
+                                                    <TextBlock Text="{Binding Status}"
+                                                               FontSize="10" FontWeight="Medium"
+                                                               Foreground="White" />
+                                                </Border>
+                                                <TextBlock Text="{Binding Quantization}"
+                                                           Classes="muted"
+                                                           Margin="8,0,0,0"
+                                                           VerticalAlignment="Center" />
+                                            </StackPanel>
+                                            <TextBlock Classes="muted" Margin="0,3,0,0">
+                                                <Run Text="{Binding HfRepoId, FallbackValue='local file'}" />
+                                                <Run Text=" · " />
+                                                <Run Text="{Binding FileSizeBytes, Converter={StaticResource Bytes}}" />
+                                            </TextBlock>
+                                        </StackPanel>
+
+                                        <!-- Actions -->
+                                        <StackPanel Grid.Column="1"
+                                                    Orientation="Horizontal"
+                                                    VerticalAlignment="Center">
+                                            <Button Content="⚙ Config"
+                                                    Classes="ghost"
+                                                    Padding="10,5" Margin="0,0,6,0"
+                                                    Command="{Binding DataContext.OpenConfigCommand,
+                                                        RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type UserControl}}}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Content="▶ Start"
+                                                    Classes="accent"
+                                                    Padding="10,5" Margin="0,0,6,0"
+                                                    IsVisible="{Binding IsNotRunning}"
+                                                    IsEnabled="{Binding IsStartable}"
+                                                    Command="{Binding DataContext.StartModelCommand,
+                                                        RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type UserControl}}}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Content="⏹ Stop"
+                                                    Classes="ghost"
+                                                    Padding="10,5" Margin="0,0,6,0"
+                                                    IsVisible="{Binding IsRunning}"
+                                                    Command="{Binding DataContext.StopModelCommand,
+                                                        RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type UserControl}}}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Content="🗑 Remove"
+                                                    Classes="danger"
+                                                    Padding="10,5"
+                                                    Command="{Binding DataContext.RemoveModelCommand,
+                                                        RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type UserControl}}}"
+                                                    CommandParameter="{Binding}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBlock Text="{Binding LoadingStatus}"
+                               Classes="muted" Margin="0,8,0,0" />
+                </StackPanel>
+            </Border>
+
+            <!-- ── HuggingFace search ──────────────────────────────────── -->
+            <Border Classes="card">
+                <StackPanel>
+                    <TextBlock Text="Download from HuggingFace"
+                               FontSize="14" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               Margin="0,0,0,12" />
+
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+                        <TextBox Grid.Column="0"
+                                 Text="{Binding HfSearchQuery}"
+                                 Margin="0,0,8,0"
+                                 Padding="10,8">
+                            <TextBox.KeyBindings>
+                                <KeyBinding Gesture="Return"
+                                            Command="{Binding SearchHuggingFaceCommand}" />
+                            </TextBox.KeyBindings>
+                        </TextBox>
+                        <Button Grid.Column="1"
+                                Content="🔍 Search"
+                                Classes="accent"
+                                Command="{Binding SearchHuggingFaceCommand}" />
+                    </Grid>
+
+                    <!-- Search results -->
+                    <ListBox ItemsSource="{Binding HfResults}"
+                             SelectedItem="{Binding SelectedHfModel}"
+                             MaxHeight="200"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             Margin="0,0,0,12"
+                             IsVisible="{Binding HfResults.Count,
+                                 Converter={StaticResource BoolVis}}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding RepoId}"
+                                               FontWeight="Medium" />
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Downloads, StringFormat='↓ {0:N0}'}"
+                                               Classes="muted" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- GGUF file list -->
+                    <ItemsControl ItemsSource="{Binding HfFiles}"
+                                  IsVisible="{Binding HfFiles.Count,
+                                      Converter={StaticResource BoolVis}}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{StaticResource BgPanelBrush}"
+                                        BorderBrush="{StaticResource BorderBrush}"
+                                        BorderThickness="1" CornerRadius="6"
+                                        Padding="10,8" Margin="0,0,0,4">
+                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding Filename}"
+                                                   Foreground="{StaticResource TextPrimaryBrush}"
+                                                   FontSize="12"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <Border Grid.Column="1"
+                                                Background="{StaticResource BgInputBrush}"
+                                                CornerRadius="4" Padding="6,2" Margin="8,0">
+                                            <TextBlock Text="{Binding Quantization}"
+                                                       FontSize="10" Classes="muted" />
+                                        </Border>
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{Binding SizeBytes, Converter={StaticResource Bytes}}"
+                                                   Classes="muted"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,8,0" />
+                                        <Button Grid.Column="3"
+                                                Content="⬇ Download"
+                                                Classes="accent"
+                                                Padding="10,5"
+                                                Command="{Binding DataContext.DownloadFileCommand,
+                                                    RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type UserControl}}}"
+                                                CommandParameter="{Binding}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- Download progress -->
+                    <StackPanel IsVisible="{Binding IsDownloading}" Margin="0,12,0,0">
+                        <ProgressBar Value="{Binding DownloadProgress}" Maximum="100" />
+                        <TextBlock Text="{Binding DownloadStatus}"
+                                   Classes="muted" Margin="0,4,0,0" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

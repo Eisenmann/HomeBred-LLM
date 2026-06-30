@@ -1,0 +1,149 @@
+<UserControl x:Class="HomebredLLM.Views.ChatView"
+             xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:conv="using:HomebredLLM.Converters">
+
+    <UserControl.Resources>
+        <conv:RoleToBubbleColorConverter x:Key="BubbleColor" />
+        <conv:RoleToAlignConverter x:Key="RoleAlign" />
+        <conv:BoolToVisibilityConverter x:Key="BoolVis" />
+    </UserControl.Resources>
+
+    <Grid ColumnDefinitions="220,*">
+
+        <!-- ── Session list ───────────────────────────────────────────── -->
+        <Border Grid.Column="0"
+                Background="{StaticResource BgPanelBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="0,0,1,0">
+            <DockPanel>
+
+                <!-- Model selector + new chat -->
+                <StackPanel DockPanel.Dock="Top" Margin="10,10,10,6">
+                    <TextBlock Text="Model" Classes="label" />
+                    <ComboBox ItemsSource="{Binding RunningModels}"
+                              SelectedItem="{Binding SelectedModel}"
+                              DisplayMemberBinding="{Binding Name}" />
+                    <Button Content="+ New Chat"
+                            Classes="accent"
+                            Margin="0,8,0,0"
+                            HorizontalAlignment="Stretch"
+                            Command="{Binding NewSessionCommand}" />
+                </StackPanel>
+
+                <!-- Sessions -->
+                <ListBox DockPanel.Dock="Top"
+                         ItemsSource="{Binding Sessions}"
+                         SelectedItem="{Binding SelectedSession}"
+                         Margin="6,0">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding Title}"
+                                           TextTrimming="CharacterEllipsis"
+                                           FontSize="12" />
+                                <Button Grid.Column="1"
+                                        Content="✕"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Foreground="{StaticResource TextMutedBrush}"
+                                        Padding="4,0"
+                                        FontSize="11"
+                                        Command="{Binding DataContext.DeleteSessionCommand,
+                                            RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type UserControl}}}"
+                                        CommandParameter="{Binding}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+            </DockPanel>
+        </Border>
+
+        <!-- ── Chat window ─────────────────────────────────────────────── -->
+        <Grid Grid.Column="1" RowDefinitions="*,Auto">
+
+            <!-- Messages -->
+            <ScrollViewer Grid.Row="0" x:Name="MessagesScroll"
+                          VerticalScrollBarVisibility="Auto"
+                          Padding="16,12">
+                <StackPanel>
+                    <ItemsControl ItemsSource="{Binding Messages}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,0,0,10">
+                                    <Border MaxWidth="640"
+                                            Background="{Binding Role, Converter={StaticResource BubbleColor}}"
+                                            CornerRadius="12"
+                                            Padding="12,8"
+                                            HorizontalAlignment="{Binding Role, Converter={StaticResource RoleAlign}}">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Content}"
+                                                       Foreground="White"
+                                                       TextWrapping="Wrap"
+                                                       FontSize="13" />
+                                            <TextBlock FontSize="10"
+                                                       Foreground="#80FFFFFF"
+                                                       Margin="0,4,0,0"
+                                                       IsVisible="{Binding TokensPerSecond,
+                                                           Converter={StaticResource BoolVis}}"
+                                                       Text="{Binding TokensPerSecond,
+                                                           StringFormat='{}{0:F1} t/s'}" />
+                                        </StackPanel>
+                                    </Border>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- Streaming reply -->
+                    <Border MaxWidth="640"
+                            Background="{StaticResource BgCardBrush}"
+                            CornerRadius="12"
+                            Padding="12,8"
+                            HorizontalAlignment="Left"
+                            Margin="0,0,0,10"
+                            IsVisible="{Binding IsGenerating}">
+                        <TextBlock Text="{Binding StreamingReply}"
+                                   Foreground="{StaticResource TextPrimaryBrush}"
+                                   TextWrapping="Wrap"
+                                   FontSize="13" />
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Input bar -->
+            <Border Grid.Row="1"
+                    Background="{StaticResource BgPanelBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,1,0,0"
+                    Padding="12,10">
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBox Grid.Column="0"
+                             Text="{Binding UserInput}"
+                             AcceptsReturn="False"
+                             Margin="0,0,8,0"
+                             Padding="10,8">
+                        <TextBox.KeyBindings>
+                            <KeyBinding Gesture="Return" Command="{Binding SendCommand}" />
+                        </TextBox.KeyBindings>
+                    </TextBox>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button Content="Send ▶"
+                                Classes="accent"
+                                Command="{Binding SendCommand}"
+                                IsEnabled="{Binding IsGenerating,
+                                    Converter={StaticResource BoolVis},
+                                    ConverterParameter=inverse}"
+                                Margin="0,0,6,0" />
+                        <Button Content="■ Stop"
+                                Classes="danger"
+                                Command="{Binding CancelGenerationCommand}"
+                                IsVisible="{Binding IsGenerating}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>
