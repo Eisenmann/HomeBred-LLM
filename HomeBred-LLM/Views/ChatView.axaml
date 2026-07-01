@@ -1,15 +1,19 @@
 <UserControl x:Class="HomebredLLM.Views.ChatView"
              xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:conv="using:HomebredLLM.Converters">
+             xmlns:conv="using:HomebredLLM.Converters"
+             xmlns:dconv="using:Avalonia.Data.Converters"
+             xmlns:models="using:HomebredLLM.Models">
 
     <UserControl.Resources>
         <conv:RoleToBubbleColorConverter x:Key="BubbleColor" />
         <conv:RoleToAlignConverter x:Key="RoleAlign" />
         <conv:BoolToVisibilityConverter x:Key="BoolVis" />
+        <conv:BytesToReadableConverter x:Key="BytesReadable" />
+        <conv:PathToBitmapConverter x:Key="PathToBitmap" />
     </UserControl.Resources>
 
-    <Grid ColumnDefinitions="220,*">
+    <Grid ColumnDefinitions="220,*" DragDrop.AllowDrop="True">
 
         <!-- ── Session list ───────────────────────────────────────────── -->
         <Border Grid.Column="0"
@@ -79,6 +83,39 @@
                                             Padding="12,8"
                                             HorizontalAlignment="{Binding Role, Converter={StaticResource RoleAlign}}">
                                         <StackPanel>
+                                            <ItemsControl ItemsSource="{Binding Attachments}"
+                                                          IsVisible="{Binding Attachments.Count, Converter={StaticResource BoolVis}}"
+                                                          Margin="0,0,0,6">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <WrapPanel />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Margin="0,0,6,6" CornerRadius="8" ClipToBounds="True">
+                                                            <Panel>
+                                                                <Image Source="{Binding StoredPath, Converter={StaticResource PathToBitmap}}"
+                                                                       IsVisible="{Binding Kind, Converter={x:Static dconv:ObjectConverters.Equal}, ConverterParameter={x:Static models:AttachmentKind.Image}}"
+                                                                       Stretch="UniformToFill"
+                                                                       MaxWidth="220" MaxHeight="160" />
+                                                                <Border Background="#33000000"
+                                                                        Padding="6,4"
+                                                                        IsVisible="{Binding Kind, Converter={x:Static dconv:ObjectConverters.NotEqual}, ConverterParameter={x:Static models:AttachmentKind.Image}}">
+                                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                        <TextBlock Text="{Binding FileName}"
+                                                                                   FontSize="11"
+                                                                                   Foreground="White" />
+                                                                        <TextBlock Text="{Binding SizeBytes, Converter={StaticResource BytesReadable}}"
+                                                                                   FontSize="10"
+                                                                                   Foreground="#B0FFFFFF" />
+                                                                    </StackPanel>
+                                                                </Border>
+                                                            </Panel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
                                             <TextBlock Text="{Binding Content}"
                                                        Foreground="White"
                                                        TextWrapping="Wrap"
@@ -119,31 +156,88 @@
                     BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="0,1,0,0"
                     Padding="12,10">
-                <Grid ColumnDefinitions="*,Auto">
-                    <TextBox Grid.Column="0"
-                             Text="{Binding UserInput}"
-                             AcceptsReturn="False"
-                             Margin="0,0,8,0"
-                             Padding="10,8">
-                        <TextBox.KeyBindings>
-                            <KeyBinding Gesture="Return" Command="{Binding SendCommand}" />
-                        </TextBox.KeyBindings>
-                    </TextBox>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                        <Button Content="Send ▶"
-                                Classes="accent"
-                                Command="{Binding SendCommand}"
-                                IsEnabled="{Binding IsGenerating,
-                                    Converter={StaticResource BoolVis},
-                                    ConverterParameter=inverse}"
-                                Margin="0,0,6,0" />
-                        <Button Content="■ Stop"
-                                Classes="danger"
-                                Command="{Binding CancelGenerationCommand}"
-                                IsVisible="{Binding IsGenerating}" />
-                    </StackPanel>
-                </Grid>
+                <StackPanel>
+
+                    <!-- Pending attachment chips -->
+                    <ItemsControl ItemsSource="{Binding PendingAttachments}"
+                                  IsVisible="{Binding PendingAttachments.Count, Converter={StaticResource BoolVis}}"
+                                  Margin="0,0,0,8">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{StaticResource BgCardBrush}"
+                                        CornerRadius="6"
+                                        Padding="8,4"
+                                        Margin="0,0,6,6">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <TextBlock Text="{Binding DisplayName}"
+                                                   FontSize="11"
+                                                   MaxWidth="160"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <Button Content="✕"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                Padding="2,0"
+                                                FontSize="11"
+                                                Foreground="{StaticResource TextMutedBrush}"
+                                                Command="{Binding DataContext.RemovePendingAttachmentCommand,
+                                                    RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type UserControl}}}"
+                                                CommandParameter="{Binding}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                        <Button Grid.Column="0"
+                                Content="📎"
+                                ToolTip.Tip="Attach files"
+                                Margin="0,0,6,0"
+                                Click="Attach_Click" />
+                        <Button Grid.Column="1"
+                                Content="📁"
+                                ToolTip.Tip="Attach folder"
+                                Margin="0,0,8,0"
+                                Click="AttachFolder_Click" />
+                        <TextBox Grid.Column="2"
+                                 Text="{Binding UserInput}"
+                                 AcceptsReturn="False"
+                                 Margin="0,0,8,0"
+                                 Padding="10,8">
+                            <TextBox.KeyBindings>
+                                <KeyBinding Gesture="Return" Command="{Binding SendCommand}" />
+                            </TextBox.KeyBindings>
+                        </TextBox>
+                        <StackPanel Grid.Column="3" Orientation="Horizontal">
+                            <Button Content="Send ▶"
+                                    Classes="accent"
+                                    Command="{Binding SendCommand}"
+                                    IsEnabled="{Binding IsGenerating,
+                                        Converter={StaticResource BoolVis},
+                                        ConverterParameter=inverse}"
+                                    Margin="0,0,6,0" />
+                            <Button Content="■ Stop"
+                                    Classes="danger"
+                                    Command="{Binding CancelGenerationCommand}"
+                                    IsVisible="{Binding IsGenerating}" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
             </Border>
         </Grid>
+
+        <!-- Drag-and-drop highlight overlay -->
+        <Border x:Name="DropHighlight"
+                Grid.ColumnSpan="2"
+                Background="#2260A5FA"
+                BorderBrush="#6060A5FA"
+                BorderThickness="2"
+                Opacity="0"
+                IsHitTestVisible="False" />
     </Grid>
 </UserControl>

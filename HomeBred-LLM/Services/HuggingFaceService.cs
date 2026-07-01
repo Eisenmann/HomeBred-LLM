@@ -56,12 +56,30 @@ public sealed class HuggingFaceService
 
         return resp.Siblings
             .Where(s => s.Rfilename.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
+            .Where(s => !IsMmprojFile(s.Rfilename))
             .Select(s => new HfFileInfo(
                 s.Rfilename,
                 s.Size,
                 ParseQuantization(s.Rfilename)))
             .ToList();
     }
+
+    /// <summary>Vision models ship a companion "mmproj" GGUF (the CLIP/vision projector)
+    /// alongside the text model — find it so the caller can download it too.</summary>
+    public async Task<HfFileInfo?> FindMmprojFileAsync(string repoId, CancellationToken ct = default)
+    {
+        var url = $"https://huggingface.co/api/models/{repoId}";
+        var resp = await _http.GetFromJsonAsync<HfModelDetail>(url, ct);
+        if (resp?.Siblings is null) return null;
+
+        var mmproj = resp.Siblings.FirstOrDefault(s =>
+            s.Rfilename.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) && IsMmprojFile(s.Rfilename));
+
+        return mmproj is null ? null : new HfFileInfo(mmproj.Rfilename, mmproj.Size, null);
+    }
+
+    private static bool IsMmprojFile(string filename) =>
+        filename.Contains("mmproj", StringComparison.OrdinalIgnoreCase);
 
     public async Task DownloadFileAsync(
         string repoId,

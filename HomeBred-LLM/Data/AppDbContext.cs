@@ -10,6 +10,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<AnalyticsMetric> AnalyticsMetrics => Set<AnalyticsMetric>();
     public DbSet<ChatSession> ChatSessions => Set<ChatSession>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<ChatAttachment> ChatAttachments => Set<ChatAttachment>();
     public DbSet<DownloadJob> DownloadJobs => Set<DownloadJob>();
 
     protected override void OnModelCreating(ModelBuilder b)
@@ -45,8 +46,18 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
          .HasForeignKey(m => m.SessionId)
          .OnDelete(DeleteBehavior.Cascade);
 
-        b.Entity<ChatMessage>()
-         .Property(m => m.Role).HasConversion<string>();
+        b.Entity<ChatMessage>(e =>
+        {
+            e.Property(m => m.Role).HasConversion<string>();
+
+            e.HasMany(m => m.Attachments)
+             .WithOne(a => a.Message)
+             .HasForeignKey(a => a.MessageId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<ChatAttachment>()
+         .Property(a => a.Kind).HasConversion<string>();
 
         b.Entity<DownloadJob>()
          .Property(j => j.Status).HasConversion<string>();
@@ -69,15 +80,38 @@ public static class AppDbContextSchemaReconciler
     public static async Task ReconcileSchemaAsync(this AppDbContext db)
     {
         var existingColumns = await GetColumnsAsync(db, "ModelConfigurations");
-        if (existingColumns.Count == 0) return; // table doesn't exist yet — nothing to patch
+        if (existingColumns.Count > 0)
+        {
+            if (!existingColumns.Contains("ApiServerEnabled"))
+                await db.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE \"ModelConfigurations\" ADD COLUMN \"ApiServerEnabled\" INTEGER NOT NULL DEFAULT 0");
 
-        if (!existingColumns.Contains("ApiServerEnabled"))
-            await db.Database.ExecuteSqlRawAsync(
-                "ALTER TABLE \"ModelConfigurations\" ADD COLUMN \"ApiServerEnabled\" INTEGER NOT NULL DEFAULT 0");
+            if (!existingColumns.Contains("ApiPort"))
+                await db.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE \"ModelConfigurations\" ADD COLUMN \"ApiPort\" INTEGER NOT NULL DEFAULT 8080");
+        }
 
-        if (!existingColumns.Contains("ApiPort"))
+        var modelColumns = await GetColumnsAsync(db, "Models");
+        if (modelColumns.Count > 0 && !modelColumns.Contains("MmprojPath"))
             await db.Database.ExecuteSqlRawAsync(
-                "ALTER TABLE \"ModelConfigurations\" ADD COLUMN \"ApiPort\" INTEGER NOT NULL DEFAULT 8080");
+                "ALTER TABLE \"Models\" ADD COLUMN \"MmprojPath\" TEXT NULL");
+
+        var attachmentColumns = await GetColumnsAsync(db, "ChatAttachments");
+        if (attachmentColumns.Count == 0)
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TABLE IF NOT EXISTS "ChatAttachments" (
+                    "Id" TEXT NOT NULL PRIMARY KEY,
+                    "MessageId" TEXT NOT NULL,
+                    "FileName" TEXT NOT NULL,
+                    "StoredPath" TEXT NOT NULL,
+                    "Kind" TEXT NOT NULL,
+                    "MimeType" TEXT NULL,
+                    "SizeBytes" INTEGER NOT NULL,
+                    "CreatedAt" TEXT NOT NULL,
+                    CONSTRAINT "FK_ChatAttachments_ChatMessages_MessageId" FOREIGN KEY ("MessageId") REFERENCES "ChatMessages" ("Id") ON DELETE CASCADE
+                )
+                """);
     }
 
     private static async Task<HashSet<string>> GetColumnsAsync(AppDbContext db, string tableName)

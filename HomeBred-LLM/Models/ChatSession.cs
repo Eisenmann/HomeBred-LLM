@@ -27,4 +27,21 @@ public class ChatMessage
     public float? TokensPerSecond { get; set; }
     public float? InferenceTimeMs { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    public List<ChatAttachment> Attachments { get; set; } = [];
+}
+
+public enum AttachmentKind { Image, Text, Other }
+
+public class ChatAttachment
+{
+    [Key] public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid MessageId { get; set; }
+    public ChatMessage? Message { get; set; }
+    public string FileName { get; set; } = "";
+    public string StoredPath { get; set; } = "";
+    public AttachmentKind Kind { get; set; }
+    public string? MimeType { get; set; }
+    public long SizeBytes { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
