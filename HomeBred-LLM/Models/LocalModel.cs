@@ -26,6 +26,7 @@ public class LocalModel
     public List<AnalyticsMetric> Metrics { get; set; } = [];
     public List<ChatSession> ChatSessions { get; set; } = [];
     public List<DownloadJob> DownloadJobs { get; set; } = [];
+    public List<LoraAdapterConfig> LoraAdapters { get; set; } = [];
 
     // Computed for Avalonia IsVisible bindings (replaces WPF DataTrigger)
     public bool IsRunning    => Status == ModelStatus.Running;

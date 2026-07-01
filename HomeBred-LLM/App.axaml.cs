@@ -33,6 +33,7 @@ public partial class App : Application
                 services.AddSingleton<AnalyticsRepository>();
                 services.AddSingleton<MetricsCollectorService>();
                 services.AddSingleton<ModelApiServerService>();
+                services.AddSingleton<LoraImportService>();
 
                 // VMs are singletons so MainViewModel can hold references to them
                 services.AddSingleton<ModelLibraryViewModel>();
@@ -94,4 +95,5 @@ public static class AppPaths
     public static string DatabaseFile => Path.Combine(Base, "homebred.db");
     public static string ModelsDirectory => Directory.CreateDirectory(Path.Combine(Base, "models")).FullName;
     public static string AttachmentsDirectory => Directory.CreateDirectory(Path.Combine(Base, "attachments")).FullName;
+    public static string AdaptersDirectory => Directory.CreateDirectory(Path.Combine(Base, "adapters")).FullName;
 }

@@ -12,6 +12,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
     public DbSet<ChatAttachment> ChatAttachments => Set<ChatAttachment>();
     public DbSet<DownloadJob> DownloadJobs => Set<DownloadJob>();
+    public DbSet<LoraAdapterConfig> LoraAdapters => Set<LoraAdapterConfig>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -35,6 +36,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasMany(m => m.DownloadJobs)
              .WithOne(j => j.Model)
              .HasForeignKey(j => j.ModelId)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasMany(m => m.LoraAdapters)
+             .WithOne(a => a.Model)
+             .HasForeignKey(a => a.ModelId)
              .OnDelete(DeleteBehavior.Cascade);
 
             e.Property(m => m.Status).HasConversion<string>();
@@ -110,6 +116,22 @@ public static class AppDbContextSchemaReconciler
                     "SizeBytes" INTEGER NOT NULL,
                     "CreatedAt" TEXT NOT NULL,
                     CONSTRAINT "FK_ChatAttachments_ChatMessages_MessageId" FOREIGN KEY ("MessageId") REFERENCES "ChatMessages" ("Id") ON DELETE CASCADE
+                )
+                """);
+
+        var loraColumns = await GetColumnsAsync(db, "LoraAdapters");
+        if (loraColumns.Count == 0)
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TABLE IF NOT EXISTS "LoraAdapters" (
+                    "Id" TEXT NOT NULL PRIMARY KEY,
+                    "ModelId" TEXT NOT NULL,
+                    "Name" TEXT NOT NULL,
+                    "FilePath" TEXT NOT NULL,
+                    "Scale" REAL NOT NULL,
+                    "Enabled" INTEGER NOT NULL,
+                    "CreatedAt" TEXT NOT NULL,
+                    CONSTRAINT "FK_LoraAdapters_Models_ModelId" FOREIGN KEY ("ModelId") REFERENCES "Models" ("Id") ON DELETE CASCADE
                 )
                 """);
     }

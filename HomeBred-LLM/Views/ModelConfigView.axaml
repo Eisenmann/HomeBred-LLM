@@ -104,6 +104,51 @@
                         </TextBlock>
                     </StackPanel>
 
+                    <!-- LoRA adapters -->
+                    <TextBlock Text="LoRA Adapters" Classes="label" Margin="0,4,0,2" />
+                    <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"
+                               Text="Attach pre-trained GGUF LoRA adapters. Applied when the model starts — Stop and Start the model for changes to take effect." />
+
+                    <ItemsControl ItemsSource="{Binding Adapters}" Margin="0,0,0,8">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderBrush="{StaticResource BorderBrush}"
+                                        BorderThickness="1" CornerRadius="4"
+                                        Padding="8" Margin="0,0,0,6">
+                                    <Grid ColumnDefinitions="*,72,Auto,Auto">
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0">
+                                            <TextBox Text="{Binding Name}" Watermark="Adapter name" />
+                                            <TextBlock Text="{Binding FilePath}" Classes="muted"
+                                                       FontSize="10" TextTrimming="CharacterEllipsis"
+                                                       Margin="0,2,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,8,0">
+                                            <TextBlock Text="Scale" Classes="muted" FontSize="10" />
+                                            <TextBox Text="{Binding Scale, StringFormat='{}{0:F2}'}" />
+                                        </StackPanel>
+                                        <CheckBox Grid.Column="2" Content="On"
+                                                  IsChecked="{Binding Enabled}"
+                                                  VerticalAlignment="Center" Margin="0,0,8,0" />
+                                        <Button Grid.Column="3" Content="🗑" Classes="ghost"
+                                                VerticalAlignment="Center"
+                                                Command="{Binding $parent[ItemsControl].DataContext.RemoveAdapterCommand}"
+                                                CommandParameter="{Binding}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <Button Content="＋ Add adapter…"
+                            Classes="ghost"
+                            Click="AddAdapter_Click"
+                            HorizontalAlignment="Left"
+                            Margin="0,0,0,4" />
+                    <TextBlock Text="{Binding AdapterError}"
+                               Foreground="{StaticResource DangerBrush}"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,16" />
+
                     <!-- Buttons -->
                     <StackPanel Orientation="Horizontal">
                         <Button Content="💾 Save"

@@ -29,6 +29,11 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
         public MtmdWeights? Mtmd;
         public MtmdContextParams? MtmdParams;
 
+        // GGUF LoRA adapters applied to this model. The handles are owned by the
+        // model weights, so the same handle can be applied to any context of this
+        // model (chat context here, and the embedder context when it's created).
+        public readonly List<(LoraAdapter Adapter, float Scale)> LoraAdapters = [];
+
         // The embedder needs its own context (created with Embeddings=true), so it's
         // built lazily on first use rather than at load time — most models are only
         // ever used for chat.
@@ -38,6 +43,11 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
 
         public void Dispose()
         {
+            // Unload adapters before the weights they're attached to.
+            foreach (var (adapter, _) in LoraAdapters)
+            {
+                try { adapter.Unload(); } catch { /* adapter freed with the model anyway */ }
+            }
             Embedder?.Dispose();
             Mtmd?.Dispose();
             Context.Dispose();
@@ -55,7 +65,7 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
     public bool SupportsVision(Guid modelId) =>
         _loaded.TryGetValue(modelId, out var m) && m.Mtmd?.SupportsVision == true;
 
-    public async Task LoadAsync(Guid modelId, string modelPath, ModelConfiguration config, string? mmprojPath = null, IProgress<string>? progress = null)
+    public async Task LoadAsync(Guid modelId, string modelPath, ModelConfiguration config, string? mmprojPath = null, IReadOnlyList<LoraSpec>? loraAdapters = null, IProgress<string>? progress = null)
     {
         if (_loaded.ContainsKey(modelId)) return;
 
@@ -80,6 +90,24 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
 
         var loaded = new LoadedModel(weights, context, modelPath, config);
 
+        // Apply GGUF LoRA adapters to the freshly-created chat context. Each adapter
+        // is loaded once against the model weights; the resulting handle is reused for
+        // the embedder context too (see GetOrCreateEmbedderAsync).
+        var specs = (loraAdapters ?? []).Where(a => File.Exists(a.Path)).ToList();
+        if (specs.Count > 0)
+        {
+            await Task.Run(() =>
+            {
+                foreach (var spec in specs)
+                {
+                    progress?.Report($"Applying LoRA adapter: {Path.GetFileName(spec.Path)}…");
+                    var adapter = weights.NativeHandle.LoadLoraFromFile(spec.Path);
+                    loaded.LoraAdapters.Add((adapter, spec.Scale));
+                }
+                ApplyLoraAdapters(context, loaded.LoraAdapters);
+            });
+        }
+
         if (mmprojPath is not null && File.Exists(mmprojPath))
         {
             progress?.Report("Loading vision projector…");
@@ -91,6 +119,14 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
 
         _loaded[modelId] = loaded;
         progress?.Report("Model loaded.");
+    }
+
+    // SetLoraAdapters replaces the full adapter set on a context, so pass them all at once.
+    private static void ApplyLoraAdapters(LLamaContext context, IReadOnlyList<(LoraAdapter Adapter, float Scale)> adapters)
+    {
+        if (adapters.Count == 0) return;
+        var tuples = adapters.Select(a => (a.Adapter, a.Scale)).ToArray();
+        context.NativeHandle.SetLoraAdapters(tuples);
     }
 
     public void Unload(Guid modelId)
@@ -284,7 +320,11 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
                     GpuLayerCount = loaded.Config.GpuLayerCount,
                     Embeddings = true,
                 };
-                return new LLamaEmbedder(loaded.Weights, embedParams);
+                var embedder = new LLamaEmbedder(loaded.Weights, embedParams);
+                // Adapters are applied per-context, so the embedder's own context needs
+                // them too — the handles were already loaded against the shared weights.
+                ApplyLoraAdapters(embedder.Context, loaded.LoraAdapters);
+                return embedder;
             }, ct);
         }
         finally

@@ -195,10 +195,15 @@ public partial class ModelLibraryViewModel(
         var cfg = await db.ModelConfigurations.FirstOrDefaultAsync(c => c.ModelId == model.Id)
                   ?? new ModelConfiguration { ModelId = model.Id };
 
+        var adapters = await db.LoraAdapters
+            .Where(a => a.ModelId == model.Id && a.Enabled)
+            .Select(a => new LoraSpec(a.FilePath, a.Scale))
+            .ToListAsync();
+
         var progress = new Progress<string>(s => LoadingStatus = s);
         try
         {
-            await inference.LoadAsync(model.Id, model.LocalPath, cfg, model.MmprojPath, progress);
+            await inference.LoadAsync(model.Id, model.LocalPath, cfg, model.MmprojPath, adapters, progress);
 
             var m = await db.Models.FindAsync(model.Id);
             if (m != null) { m.Status = ModelStatus.Running; m.UpdatedAt = DateTime.UtcNow; }

@@ -36,6 +36,7 @@ No background services. No terminal. No config files.
 |--|---------|--------|
 | 📦 | **Model Library** | Search HuggingFace, browse GGUF files by quantization and size, download with a real-time progress bar |
 | ⚙️ | **Model Configuration** | Per-model sliders for temperature, top-p, top-k, repeat penalty, context size, GPU layers, batch size, and system prompt |
+| 🧬 | **LoRA Adapters** | Attach one or more pre-trained GGUF LoRA adapters to a model, each with its own blend scale and on/off toggle — applied to both chat and embeddings at load time |
 | ▶️ | **Start / Stop / Remove** | Load a model into GPU VRAM, unload it without restarting the app, or fully delete the file and database record |
 | 📊 | **Live Analytics** | GPU utilization, VRAM used/total, GPU temperature, CPU, RAM, tokens/sec, and time-to-first-token — sampled every 5 seconds |
 | 🗑️ | **Analytics Cleanup** | Delete metrics for any model over any date range without touching the model itself |
@@ -148,6 +149,14 @@ Any model available as a GGUF file on HuggingFace works, including:
 - Any other architecture supported by llama.cpp
 
 Recommended quantizations for a balance of quality and speed: `Q4_K_M`, `Q5_K_M`, `Q6_K`.
+
+---
+
+## LoRA adapters
+
+You can specialize any loaded model with pre-trained **LoRA adapters** without touching the base weights. In a model's **Config** screen, add one or more `.gguf` adapters, set a per-adapter blend **scale** (1.0 = full effect), and toggle them on/off. Adapters are applied when the model starts — Stop and Start the model to pick up changes. They affect both chat and the embeddings endpoint.
+
+> **Application only — not training.** HomeBred-LLM applies adapters; it does not train them (LLamaSharp/llama.cpp exposes no in-process training API). Train adapters with an external toolchain (e.g. PEFT/Unsloth) and convert them to GGUF with llama.cpp's `convert_lora_to_gguf.py`, then import the resulting file here.
 
 ---
 

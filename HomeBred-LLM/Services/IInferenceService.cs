@@ -4,6 +4,9 @@ namespace HomebredLLM.Services;
 
 public record InferenceAttachment(string Path, AttachmentKind Kind);
 
+/// <summary>A GGUF LoRA adapter to apply at model-load time, with its blend scale.</summary>
+public record LoraSpec(string Path, float Scale);
+
 public record InferenceRequest(
     Guid ModelId,
     string ModelPath,
@@ -21,7 +24,7 @@ public interface IInferenceService
 {
     bool IsLoaded(Guid modelId);
     bool SupportsVision(Guid modelId);
-    Task LoadAsync(Guid modelId, string modelPath, ModelConfiguration config, string? mmprojPath = null, IProgress<string>? progress = null);
+    Task LoadAsync(Guid modelId, string modelPath, ModelConfiguration config, string? mmprojPath = null, IReadOnlyList<LoraSpec>? loraAdapters = null, IProgress<string>? progress = null);
     void Unload(Guid modelId);
     void UnloadAll();
 
