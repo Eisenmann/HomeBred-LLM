@@ -39,8 +39,10 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void NavigateTo(string page)
+    private async Task NavigateToAsync(string page)
     {
+        if (page == "Chat") await _chatVm.RefreshRunningModelsAsync();
+
         CurrentView = page switch
         {
             "Chat"      => (object)_chatVm,

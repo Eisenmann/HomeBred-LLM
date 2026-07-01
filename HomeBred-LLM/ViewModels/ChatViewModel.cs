@@ -32,9 +32,21 @@ public partial class ChatViewModel(
         var sessions = await db.ChatSessions.OrderByDescending(s => s.UpdatedAt).ToListAsync();
         Sessions = new ObservableCollection<ChatSession>(sessions);
 
+        await RefreshRunningModelsAsync();
+    }
+
+    // Models started/stopped in the Model Library after startup don't otherwise
+    // reach this singleton VM, so the nav command re-calls this on every visit.
+    public async Task RefreshRunningModelsAsync()
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
         var running = await db.Models.Where(m => m.Status == ModelStatus.Running).ToListAsync();
+        var keepSelected = SelectedModel is not null && running.Any(m => m.Id == SelectedModel.Id);
+
         RunningModels = new ObservableCollection<LocalModel>(running);
-        SelectedModel = RunningModels.FirstOrDefault();
+        SelectedModel = keepSelected
+            ? running.First(m => m.Id == SelectedModel!.Id)
+            : running.FirstOrDefault();
     }
 
     [RelayCommand]
