@@ -2,15 +2,24 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HomebredLLM.Data;
 using HomebredLLM.Models;
+using HomebredLLM.Services;
 using Microsoft.EntityFrameworkCore;
+using System.Collections.ObjectModel;
 
 namespace HomebredLLM.ViewModels;
 
-public partial class ModelConfigViewModel(IDbContextFactory<AppDbContext> dbFactory) : ObservableObject
+public partial class ModelConfigViewModel(
+    IDbContextFactory<AppDbContext> dbFactory,
+    LoraImportService loraImport) : ObservableObject
 {
     [ObservableProperty] private LocalModel? _model;
     [ObservableProperty] private ModelConfiguration? _config;
     [ObservableProperty] private string _saveStatus = "";
+
+    // GGUF LoRA adapters attached to this model. Applied at load time; changing them
+    // requires a Stop→Start of the model.
+    [ObservableProperty] private ObservableCollection<LoraAdapterConfig> _adapters = [];
+    [ObservableProperty] private string _adapterError = "";
 
     // ModelConfiguration is a plain EF entity (no INotifyPropertyChanged), so the
     // API-server checkbox is mirrored here to reactively toggle the port field's
@@ -25,7 +34,10 @@ public partial class ModelConfigViewModel(IDbContextFactory<AppDbContext> dbFact
     public async Task LoadAsync(Guid modelId)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
-        Model = await db.Models.Include(m => m.Config).FirstOrDefaultAsync(m => m.Id == modelId);
+        Model = await db.Models
+            .Include(m => m.Config)
+            .Include(m => m.LoraAdapters)
+            .FirstOrDefaultAsync(m => m.Id == modelId);
         if (Model is null) return;
 
         if (Model.Config is null)
@@ -37,6 +49,50 @@ public partial class ModelConfigViewModel(IDbContextFactory<AppDbContext> dbFact
         }
         Config = Model.Config;
         ApiServerEnabled = Config.ApiServerEnabled;
+        Adapters = new ObservableCollection<LoraAdapterConfig>(
+            Model.LoraAdapters.OrderBy(a => a.CreatedAt));
+    }
+
+    /// <summary>Imports a picked GGUF adapter, persists it, and adds a row. Called from the view's file picker.</summary>
+    public async Task AddAdapterAsync(string sourcePath)
+    {
+        AdapterError = "";
+        if (Model is null) return;
+        try
+        {
+            var storedPath = await loraImport.ImportAsync(sourcePath);
+            var adapter = new LoraAdapterConfig
+            {
+                ModelId = Model.Id,
+                Name = Path.GetFileNameWithoutExtension(sourcePath),
+                FilePath = storedPath,
+                Scale = 1.0f,
+                Enabled = true,
+            };
+
+            await using var db = await dbFactory.CreateDbContextAsync();
+            db.LoraAdapters.Add(adapter);
+            await db.SaveChangesAsync();
+
+            Adapters.Add(adapter);
+        }
+        catch (Exception ex)
+        {
+            AdapterError = ex.Message;
+        }
+    }
+
+    [RelayCommand]
+    private async Task RemoveAdapterAsync(LoraAdapterConfig adapter)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var existing = await db.LoraAdapters.FindAsync(adapter.Id);
+        if (existing is not null)
+        {
+            db.LoraAdapters.Remove(existing);
+            await db.SaveChangesAsync();
+        }
+        Adapters.Remove(adapter);
     }
 
     [RelayCommand]
@@ -65,6 +121,19 @@ public partial class ModelConfigViewModel(IDbContextFactory<AppDbContext> dbFact
             existing.ApiPort = Config.ApiPort;
             existing.UpdatedAt = DateTime.UtcNow;
         }
+
+        // Persist inline edits to adapter scale / enabled toggles.
+        foreach (var adapter in Adapters)
+        {
+            var existingAdapter = await db.LoraAdapters.FindAsync(adapter.Id);
+            if (existingAdapter is not null)
+            {
+                existingAdapter.Name = adapter.Name;
+                existingAdapter.Scale = adapter.Scale;
+                existingAdapter.Enabled = adapter.Enabled;
+            }
+        }
+
         await db.SaveChangesAsync();
         SaveStatus = "Saved ✓";
         await Task.Delay(2000);
