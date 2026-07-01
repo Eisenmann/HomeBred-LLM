@@ -2,11 +2,13 @@ using HomebredLLM.Models;
 
 namespace HomebredLLM.Services;
 
+public record InferenceAttachment(string Path, AttachmentKind Kind);
+
 public record InferenceRequest(
     Guid ModelId,
     string ModelPath,
     ModelConfiguration Config,
-    IReadOnlyList<(MessageRole Role, string Content)> Messages);
+    IReadOnlyList<(MessageRole Role, string Content, IReadOnlyList<InferenceAttachment> Attachments)> Messages);
 
 public record InferenceStats(
     float TokensPerSecond,
@@ -18,7 +20,8 @@ public record InferenceStats(
 public interface IInferenceService
 {
     bool IsLoaded(Guid modelId);
-    Task LoadAsync(Guid modelId, string modelPath, ModelConfiguration config, IProgress<string>? progress = null);
+    bool SupportsVision(Guid modelId);
+    Task LoadAsync(Guid modelId, string modelPath, ModelConfiguration config, string? mmprojPath = null, IProgress<string>? progress = null);
     void Unload(Guid modelId);
     void UnloadAll();
 

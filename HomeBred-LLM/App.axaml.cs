@@ -93,4 +93,5 @@ public static class AppPaths
     public static string Base => Directory.CreateDirectory(_base).FullName;
     public static string DatabaseFile => Path.Combine(Base, "homebred.db");
     public static string ModelsDirectory => Directory.CreateDirectory(Path.Combine(Base, "models")).FullName;
+    public static string AttachmentsDirectory => Directory.CreateDirectory(Path.Combine(Base, "attachments")).FullName;
 }

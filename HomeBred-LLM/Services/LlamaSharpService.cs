@@ -1,10 +1,12 @@
 using HomebredLLM.Models;
 using LLama;
 using LLama.Common;
+using LLama.Native;
 using LLama.Sampling;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 namespace HomebredLLM.Services;
 
@@ -23,6 +25,10 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
         public ModelConfiguration Config { get; } = config;
         public SemaphoreSlim ChatLock { get; } = new(1, 1);
 
+        // Set when the model has a companion mmproj (vision projector) file.
+        public MtmdWeights? Mtmd;
+        public MtmdContextParams? MtmdParams;
+
         // The embedder needs its own context (created with Embeddings=true), so it's
         // built lazily on first use rather than at load time — most models are only
         // ever used for chat.
@@ -33,6 +39,7 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
         public void Dispose()
         {
             Embedder?.Dispose();
+            Mtmd?.Dispose();
             Context.Dispose();
             Weights.Dispose();
             ChatLock.Dispose();
@@ -45,7 +52,10 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
 
     public bool IsLoaded(Guid modelId) => _loaded.ContainsKey(modelId);
 
-    public async Task LoadAsync(Guid modelId, string modelPath, ModelConfiguration config, IProgress<string>? progress = null)
+    public bool SupportsVision(Guid modelId) =>
+        _loaded.TryGetValue(modelId, out var m) && m.Mtmd?.SupportsVision == true;
+
+    public async Task LoadAsync(Guid modelId, string modelPath, ModelConfiguration config, string? mmprojPath = null, IProgress<string>? progress = null)
     {
         if (_loaded.ContainsKey(modelId)) return;
 
@@ -68,7 +78,18 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
             return (w, c);
         });
 
-        _loaded[modelId] = new LoadedModel(weights, context, modelPath, config);
+        var loaded = new LoadedModel(weights, context, modelPath, config);
+
+        if (mmprojPath is not null && File.Exists(mmprojPath))
+        {
+            progress?.Report("Loading vision projector…");
+            var mtmdParams = MtmdContextParams.Default();
+            mtmdParams.UseGpu = config.GpuLayerCount != 0;
+            loaded.Mtmd = await MtmdWeights.LoadFromFileAsync(mmprojPath, weights, mtmdParams);
+            loaded.MtmdParams = mtmdParams;
+        }
+
+        _loaded[modelId] = loaded;
         progress?.Report("Model loaded.");
     }
 
@@ -100,16 +121,22 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
         await loaded.ChatLock.WaitAsync(ct);
         try
         {
-            var executor = new InteractiveExecutor(loaded.Context);
+            var executor = loaded.Mtmd is not null
+                ? new InteractiveExecutor(loaded.Context, loaded.Mtmd)
+                : new InteractiveExecutor(loaded.Context);
 
             // The current turn (last message) is passed to ChatAsync below, which
             // appends it to the session history itself — so history must exclude it
-            // here, or the model sees the current turn twice.
+            // here, or the model sees the current turn twice. Every message (not just
+            // the current turn) is re-run through BuildEffectiveContent because this
+            // method re-tokenizes the whole conversation from text on every call —
+            // there's no persisted KV cache across calls — so a prior turn's image
+            // attachments must be re-queued via Mtmd.LoadMedia every time too.
             var priorMessages = request.Messages.Take(request.Messages.Count - 1);
             var currentTurn = request.Messages[^1];
 
             var chatHistory = new ChatHistory();
-            foreach (var (role, content) in priorMessages)
+            foreach (var (role, content, attachments) in priorMessages)
             {
                 chatHistory.AddMessage(role switch
                 {
@@ -117,7 +144,7 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
                     MessageRole.Assistant => AuthorRole.Assistant,
                     MessageRole.System => AuthorRole.System,
                     _ => AuthorRole.User,
-                }, content);
+                }, BuildEffectiveContent(loaded, content, attachments));
             }
 
             var cfg = request.Config;
@@ -135,6 +162,7 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
 
             var session = new LLama.ChatSession(executor, chatHistory);
 
+            var currentTurnContent = BuildEffectiveContent(loaded, currentTurn.Content, currentTurn.Attachments);
             var promptText = string.Join("\n", request.Messages.Select(m => m.Content));
             var promptTokens = loaded.Context.Tokenize(promptText, addBos: true, special: true).Length;
 
@@ -143,7 +171,7 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
             int outputTokens = 0;
 
             await foreach (var text in session.ChatAsync(
-                new ChatHistory.Message(AuthorRole.User, currentTurn.Content),
+                new ChatHistory.Message(AuthorRole.User, currentTurnContent),
                 inferenceParams,
                 ct))
             {
@@ -164,6 +192,55 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
         finally
         {
             loaded.ChatLock.Release();
+        }
+    }
+
+    private const int MaxAttachmentTextChars = 200_000;
+
+    // Queues any image attachments into the Mtmd pending-media buffer (consumed by the
+    // executor's own tokenizer the next time it processes this text) and inlines any
+    // text attachments directly into the message content.
+    private static string BuildEffectiveContent(LoadedModel loaded, string content, IReadOnlyList<InferenceAttachment> attachments)
+    {
+        if (attachments.Count == 0) return content;
+
+        var sb = new StringBuilder();
+
+        var images = attachments.Where(a => a.Kind == AttachmentKind.Image).ToList();
+        if (images.Count > 0)
+        {
+            if (loaded.Mtmd is null)
+                throw new InvalidOperationException("This model has no vision projector loaded — it can't accept image attachments.");
+
+            foreach (var image in images)
+            {
+                loaded.Mtmd.LoadMedia(image.Path);
+                sb.Append(loaded.MtmdParams!.MediaMarker).Append('\n');
+            }
+        }
+
+        foreach (var file in attachments.Where(a => a.Kind == AttachmentKind.Text))
+        {
+            sb.Append("\n[Attached: ").Append(Path.GetFileName(file.Path)).Append("]\n```\n")
+              .Append(ReadTextAttachment(file.Path)).Append("\n```\n");
+        }
+
+        sb.Append(content);
+        return sb.ToString();
+    }
+
+    private static string ReadTextAttachment(string path)
+    {
+        try
+        {
+            var text = File.ReadAllText(path);
+            return text.Length > MaxAttachmentTextChars
+                ? text[..MaxAttachmentTextChars] + "\n…(truncated)"
+                : text;
+        }
+        catch (Exception ex)
+        {
+            return $"(failed to read attachment: {ex.Message})";
         }
     }
 

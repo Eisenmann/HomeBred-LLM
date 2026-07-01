@@ -169,13 +169,13 @@ public sealed class ModelApiServerService(
             var cfg = await db.ModelConfigurations.FirstOrDefaultAsync(c => c.ModelId == modelId, serverCt)
                       ?? new ModelConfiguration();
 
-            var messages = new List<(MessageRole Role, string Content)>();
+            var messages = new List<(MessageRole Role, string Content, IReadOnlyList<InferenceAttachment> Attachments)>();
             if (!string.IsNullOrWhiteSpace(cfg.SystemPrompt) &&
                 !body.Messages.Any(m => string.Equals(m.Role, "system", StringComparison.OrdinalIgnoreCase)))
             {
-                messages.Add((MessageRole.System, cfg.SystemPrompt));
+                messages.Add((MessageRole.System, cfg.SystemPrompt, []));
             }
-            messages.AddRange(body.Messages.Select(m => (ParseRole(m.Role), m.Content)));
+            messages.AddRange(body.Messages.Select(m => (ParseRole(m.Role), m.Content, (IReadOnlyList<InferenceAttachment>)[])));
 
             var effectiveCfg = new ModelConfiguration
             {

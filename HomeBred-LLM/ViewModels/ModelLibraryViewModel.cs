@@ -126,12 +126,22 @@ public partial class ModelLibraryViewModel(
         {
             await hf.DownloadFileAsync(SelectedHfModel.RepoId, file.Filename, destPath, progress);
 
+            string? mmprojPath = null;
+            var mmproj = await hf.FindMmprojFileAsync(SelectedHfModel.RepoId);
+            if (mmproj is not null)
+            {
+                DownloadStatus = "Vision support detected — downloading projector…";
+                mmprojPath = Path.Combine(AppPaths.ModelsDirectory, Path.GetFileName(mmproj.Filename));
+                await hf.DownloadFileAsync(SelectedHfModel.RepoId, mmproj.Filename, mmprojPath);
+            }
+
             await using var db2 = await dbFactory.CreateDbContextAsync();
             var m = await db2.Models.FindAsync(model.Id);
             if (m != null)
             {
                 m.LocalPath = destPath;
                 m.FileSizeBytes = new FileInfo(destPath).Length;
+                m.MmprojPath = mmprojPath;
                 m.Status = ModelStatus.Ready;
                 m.UpdatedAt = DateTime.UtcNow;
             }
@@ -141,7 +151,10 @@ public partial class ModelLibraryViewModel(
 
             model.Status = ModelStatus.Ready;
             model.LocalPath = destPath;
-            DownloadStatus = "Download complete!";
+            model.MmprojPath = mmprojPath;
+            DownloadStatus = mmprojPath is not null
+                ? "Download complete! Vision support detected."
+                : "Download complete!";
         }
         catch (Exception ex)
         {
@@ -185,7 +198,7 @@ public partial class ModelLibraryViewModel(
         var progress = new Progress<string>(s => LoadingStatus = s);
         try
         {
-            await inference.LoadAsync(model.Id, model.LocalPath, cfg, progress);
+            await inference.LoadAsync(model.Id, model.LocalPath, cfg, model.MmprojPath, progress);
 
             var m = await db.Models.FindAsync(model.Id);
             if (m != null) { m.Status = ModelStatus.Running; m.UpdatedAt = DateTime.UtcNow; }

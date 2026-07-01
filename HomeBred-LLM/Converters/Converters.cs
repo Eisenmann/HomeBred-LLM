@@ -1,10 +1,26 @@
 using Avalonia.Data.Converters;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using HomebredLLM.Models;
 using System.Globalization;
 
 namespace HomebredLLM.Converters;
+
+// Loads a file path into a Bitmap for inline image attachment previews.
+// Swallows failures (missing/corrupt file) so a bad attachment can't crash the binding.
+public class PathToBitmapConverter : IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is not string path || string.IsNullOrEmpty(path)) return null;
+        try { return new Bitmap(path); }
+        catch { return null; }
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
 
 public class StatusToColorConverter : IValueConverter
 {

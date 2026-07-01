@@ -11,6 +11,7 @@ public class LocalModel
     public string? HfRepoId { get; set; }
     public string? HfFilename { get; set; }
     public string? LocalPath { get; set; }
+    public string? MmprojPath { get; set; }
     public long? FileSizeBytes { get; set; }
     public string? Quantization { get; set; }
     public string? Architecture { get; set; }
@@ -30,6 +31,7 @@ public class LocalModel
     public bool IsRunning    => Status == ModelStatus.Running;
     public bool IsNotRunning => Status != ModelStatus.Running;
     public bool IsStartable  => Status is ModelStatus.Ready or ModelStatus.Error;
+    public bool IsMultimodal => MmprojPath is not null;
 
     public string DisplaySize => FileSizeBytes.HasValue
         ? FileSizeBytes.Value >= 1_000_000_000
