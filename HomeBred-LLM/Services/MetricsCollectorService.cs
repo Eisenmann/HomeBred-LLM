@@ -1,6 +1,7 @@
 using HomebredLLM.Data;
 using HomebredLLM.Models;
 using Microsoft.EntityFrameworkCore;
+using System.Threading;
 
 namespace HomebredLLM.Services;
 
@@ -13,6 +14,7 @@ public sealed class MetricsCollectorService(
     IDbContextFactory<AppDbContext> dbFactory)
 {
     private System.Timers.Timer? _timer;
+    private int _isCollecting;
     public int IntervalSeconds { get; set; } = 5;
 
     // Externally set to record the latest inference stats into the next metric row
@@ -30,6 +32,7 @@ public sealed class MetricsCollectorService(
 
     private async Task CollectAsync()
     {
+        if (Interlocked.Exchange(ref _isCollecting, 1) == 1) return;
         try
         {
             await using var db = await dbFactory.CreateDbContextAsync();
@@ -66,5 +69,9 @@ public sealed class MetricsCollectorService(
             }
         }
         catch { /* Don't crash the collector on transient errors */ }
+        finally
+        {
+            Interlocked.Exchange(ref _isCollecting, 0);
+        }
     }
 }

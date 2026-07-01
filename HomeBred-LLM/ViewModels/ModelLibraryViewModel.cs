@@ -14,12 +14,15 @@ public partial class ModelLibraryViewModel(
     IDbContextFactory<AppDbContext> dbFactory,
     IInferenceService inference,
     HuggingFaceService hf,
-    MetricsCollectorService metricsCollector) : ObservableObject
+    MetricsCollectorService metricsCollector,
+    ModelApiServerService apiServer) : ObservableObject
 {
     // ── Local models ────────────────────────────────────────────────────────
     [ObservableProperty] private ObservableCollection<LocalModel> _localModels = [];
     [ObservableProperty] private LocalModel? _selectedModel;
     [ObservableProperty] private string _loadingStatus = "";
+    [ObservableProperty] private string _loadErrorDetails = "";
+    [ObservableProperty] private bool _hasLoadError;
 
     // ── HuggingFace search ─────────────────────────────────────────────────
     [ObservableProperty] private string _hfSearchQuery = "";
@@ -30,6 +33,8 @@ public partial class ModelLibraryViewModel(
     [ObservableProperty] private bool _isDownloading;
     [ObservableProperty] private double _downloadProgress;
     [ObservableProperty] private string _downloadStatus = "";
+    [ObservableProperty] private string _downloadErrorDetails = "";
+    [ObservableProperty] private bool _hasDownloadError;
 
     public async Task InitializeAsync()
     {
@@ -75,6 +80,8 @@ public partial class ModelLibraryViewModel(
         if (SelectedHfModel is null || IsDownloading) return;
         IsDownloading = true;
         DownloadProgress = 0;
+        HasDownloadError = false;
+        DownloadErrorDetails = "";
 
         var modelName = $"{SelectedHfModel.ModelName} {file.Quantization}".Trim();
         var destPath = Path.Combine(AppPaths.ModelsDirectory, Path.GetFileName(file.Filename));
@@ -140,6 +147,10 @@ public partial class ModelLibraryViewModel(
         {
             model.Status = ModelStatus.Error;
             DownloadStatus = $"Error: {ex.Message}";
+            DownloadErrorDetails = ex.ToString();
+            HasDownloadError = true;
+            if (File.Exists(destPath))
+                try { File.Delete(destPath); } catch { /* ignore locked file */ }
         }
         finally
         {
@@ -162,6 +173,8 @@ public partial class ModelLibraryViewModel(
         }
 
         LoadingStatus = "Loading model into memory…";
+        HasLoadError = false;
+        LoadErrorDetails = "";
         model.Status = ModelStatus.Running;
         UpdateModelInList(model);
 
@@ -177,12 +190,32 @@ public partial class ModelLibraryViewModel(
             var m = await db.Models.FindAsync(model.Id);
             if (m != null) { m.Status = ModelStatus.Running; m.UpdatedAt = DateTime.UtcNow; }
             await db.SaveChangesAsync();
-            LoadingStatus = $"{model.Name} is running.";
+
+            if (cfg.ApiServerEnabled)
+            {
+                try
+                {
+                    apiServer.Start(model.Id, cfg.ApiPort);
+                    LoadingStatus = $"{model.Name} is running. API: {apiServer.EndpointUrl(model.Id)}";
+                }
+                catch (Exception apiEx)
+                {
+                    LoadingStatus = $"{model.Name} is running, but the API server failed to start (port {cfg.ApiPort} may be in use).";
+                    LoadErrorDetails = apiEx.ToString();
+                    HasLoadError = true;
+                }
+            }
+            else
+            {
+                LoadingStatus = $"{model.Name} is running.";
+            }
         }
         catch (Exception ex)
         {
             model.Status = ModelStatus.Error;
             LoadingStatus = $"Failed to load: {ex.Message}";
+            LoadErrorDetails = ex.ToString();
+            HasLoadError = true;
             UpdateModelInList(model);
         }
     }
@@ -190,6 +223,7 @@ public partial class ModelLibraryViewModel(
     [RelayCommand]
     private async Task StopModelAsync(LocalModel model)
     {
+        apiServer.Stop(model.Id);
         inference.Unload(model.Id);
         model.Status = ModelStatus.Ready;
         UpdateModelInList(model);
@@ -204,6 +238,7 @@ public partial class ModelLibraryViewModel(
     [RelayCommand]
     private async Task RemoveModelAsync(LocalModel model)
     {
+        apiServer.Stop(model.Id);
         inference.Unload(model.Id);
 
         if (model.LocalPath is not null && File.Exists(model.LocalPath))

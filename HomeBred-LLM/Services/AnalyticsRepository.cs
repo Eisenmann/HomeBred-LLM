@@ -40,21 +40,37 @@ public sealed class AnalyticsRepository(IDbContextFactory<AppDbContext> dbFactor
         Guid modelId, DateTime from, DateTime to)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
-        var q = db.AnalyticsMetrics
-            .Where(m => m.ModelId == modelId && m.RecordedAt >= from && m.RecordedAt <= to);
+        var result = await db.AnalyticsMetrics
+            .Where(m => m.ModelId == modelId && m.RecordedAt >= from && m.RecordedAt <= to)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                AvgGpuUtilPct      = g.Average(m => (double?)m.GpuUtilizationPct),
+                MaxGpuUtilPct      = g.Max(m => (double?)m.GpuUtilizationPct),
+                AvgGpuMemUsedMb    = g.Average(m => (double?)m.GpuMemoryUsedMb),
+                PeakGpuMemUsedMb   = g.Max(m => (double?)m.GpuMemoryUsedMb),
+                AvgTokensPerSecond = g.Average(m => (double?)m.TokensPerSecond),
+                MaxTokensPerSecond = g.Max(m => (double?)m.TokensPerSecond),
+                AvgTtftMs          = g.Average(m => (double?)m.TimeToFirstTokenMs),
+                TotalPromptTokens  = g.Sum(m => (long?)m.PromptTokens),
+                TotalOutputTokens  = g.Sum(m => (long?)m.OutputTokens),
+                AvgCpuUtilPct      = g.Average(m => (double?)m.CpuUtilizationPct),
+                TotalPoints        = g.Count(),
+            })
+            .FirstOrDefaultAsync();
 
         return new AnalyticsSummary(
-            AvgGpuUtilPct:       await q.AverageAsync(m => (double?)m.GpuUtilizationPct),
-            MaxGpuUtilPct:       await q.MaxAsync(m => (double?)m.GpuUtilizationPct),
-            AvgGpuMemUsedMb:     await q.AverageAsync(m => (double?)m.GpuMemoryUsedMb),
-            PeakGpuMemUsedMb:    await q.MaxAsync(m => (double?)m.GpuMemoryUsedMb),
-            AvgTokensPerSecond:  await q.AverageAsync(m => (double?)m.TokensPerSecond),
-            MaxTokensPerSecond:  await q.MaxAsync(m => (double?)m.TokensPerSecond),
-            AvgTtftMs:           await q.AverageAsync(m => (double?)m.TimeToFirstTokenMs),
-            TotalPromptTokens:   await q.SumAsync(m => (long?)m.PromptTokens) ?? 0,
-            TotalOutputTokens:   await q.SumAsync(m => (long?)m.OutputTokens) ?? 0,
-            AvgCpuUtilPct:       await q.AverageAsync(m => (double?)m.CpuUtilizationPct),
-            TotalPoints:         await q.CountAsync()
+            AvgGpuUtilPct:       result?.AvgGpuUtilPct,
+            MaxGpuUtilPct:       result?.MaxGpuUtilPct,
+            AvgGpuMemUsedMb:     result?.AvgGpuMemUsedMb,
+            PeakGpuMemUsedMb:    result?.PeakGpuMemUsedMb,
+            AvgTokensPerSecond:  result?.AvgTokensPerSecond,
+            MaxTokensPerSecond:  result?.MaxTokensPerSecond,
+            AvgTtftMs:           result?.AvgTtftMs,
+            TotalPromptTokens:   result?.TotalPromptTokens ?? 0,
+            TotalOutputTokens:   result?.TotalOutputTokens ?? 0,
+            AvgCpuUtilPct:       result?.AvgCpuUtilPct,
+            TotalPoints:         result?.TotalPoints ?? 0
         );
     }
 

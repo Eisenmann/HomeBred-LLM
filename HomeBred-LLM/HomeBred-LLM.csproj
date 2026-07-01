@@ -15,9 +15,9 @@
 
   <ItemGroup>
     <!-- Inference engine — LLamaSharp with CUDA 12 and CPU fallback -->
-    <PackageReference Include="LLamaSharp" Version="0.17.0" />
-    <PackageReference Include="LLamaSharp.Backend.Cuda12" Version="0.17.0" />
-    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.17.0" />
+    <PackageReference Include="LLamaSharp" Version="0.27.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cuda12" Version="0.27.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.27.0" />
 
     <!-- Database -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.8" />
@@ -32,6 +32,12 @@
     <!-- DI + Hosting -->
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+
+    <!-- Transitive pins to patched versions (see NU1903 advisories on the unpinned versions).
+         SQLitePCLRaw.lib.e_sqlite3 has no patched release yet (GHSA-2m69-gcr7-jv3q lists no
+         fixed version as of 2.1.11) so it is left unpinned. -->
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.1" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
 
     <!-- Avalonia UI -->
     <PackageReference Include="Avalonia" Version="11.2.3" />

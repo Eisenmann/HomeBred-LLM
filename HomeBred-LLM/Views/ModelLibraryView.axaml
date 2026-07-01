@@ -100,6 +100,19 @@
 
                     <TextBlock Text="{Binding LoadingStatus}"
                                Classes="muted" Margin="0,8,0,0" />
+                    <Expander Header="Show error details"
+                              IsVisible="{Binding HasLoadError}"
+                              Margin="0,4,0,0">
+                        <TextBox Text="{Binding LoadErrorDetails}"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 FontFamily="Consolas,monospace"
+                                 FontSize="11"
+                                 MaxHeight="240"
+                                 Margin="0,4,0,0"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                    </Expander>
                 </StackPanel>
             </Border>
 
@@ -196,6 +209,19 @@
                         <TextBlock Text="{Binding DownloadStatus}"
                                    Classes="muted" Margin="0,4,0,0" />
                     </StackPanel>
+                    <Expander Header="Show error details"
+                              IsVisible="{Binding HasDownloadError}"
+                              Margin="0,4,0,0">
+                        <TextBox Text="{Binding DownloadErrorDetails}"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 FontFamily="Consolas,monospace"
+                                 FontSize="11"
+                                 MaxHeight="240"
+                                 Margin="0,4,0,0"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                    </Expander>
                 </StackPanel>
             </Border>
         </StackPanel>

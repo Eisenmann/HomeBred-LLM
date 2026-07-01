@@ -4,10 +4,10 @@
 
 **Cross-platform self-hosted LLM desktop app — no Ollama, no Docker, no Python.**
 
-[![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
+[![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D4)](https://github.com/your-org/homebred-llm/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![LLamaSharp](https://img.shields.io/badge/inference-LLamaSharp%200.18-blueviolet)](https://github.com/SciSharp/LLamaSharp)
+[![LLamaSharp](https://img.shields.io/badge/inference-LLamaSharp%200.27-blueviolet)](https://github.com/SciSharp/LLamaSharp)
 [![CUDA](https://img.shields.io/badge/GPU-CUDA%2012-76B900?logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
 [![Avalonia](https://img.shields.io/badge/UI-Avalonia%2011.2-8B44AC)](https://avaloniaui.net)
 
@@ -40,6 +40,7 @@ No background services. No terminal. No config files.
 | 📊 | **Live Analytics** | GPU utilization, VRAM used/total, GPU temperature, CPU, RAM, tokens/sec, and time-to-first-token — sampled every 5 seconds |
 | 🗑️ | **Analytics Cleanup** | Delete metrics for any model over any date range without touching the model itself |
 | 💬 | **Streaming Chat** | Token-by-token streaming output, multiple named sessions, per-message TPS and latency stats |
+| 🔌 | **Local API Endpoint** | Optional, opt-in per model — exposes OpenAI-compatible `POST /v1/chat/completions` (streaming supported) and `POST /v1/embeddings` on a configurable port, bound to `127.0.0.1` only |
 
 ---
 
@@ -54,6 +55,7 @@ No background services. No terminal. No config files.
 | CPU monitoring | `PerformanceCounter` on Windows · `/proc/stat` delta on Linux · GC memory API everywhere |
 | Local database | SQLite via EF Core — auto-created at first launch in the platform data directory |
 | Background metrics | `System.Timers.Timer` ticking every 5 s |
+| Local API endpoint | `System.Net.HttpListener` — opt-in per model, `127.0.0.1`-only, no separate process |
 | Charts | [LiveChartsCore](https://github.com/beto-rodriguez/LiveCharts2) (SkiaSharp, Avalonia backend) |
 | UI framework | [Avalonia UI](https://avaloniaui.net) 11.2 + [CommunityToolkit.Mvvm](https://github.com/CommunityToolkit/dotnet) |
 
@@ -63,11 +65,11 @@ No background services. No terminal. No config files.
 
 | | Windows | Linux | macOS |
 |--|---------|-------|-------|
-| .NET 8.0 | ✅ | ✅ | ✅ |
+| .NET 10.0 | ✅ | ✅ | ✅ |
 | NVIDIA GPU (CUDA 12) | optional | optional | — |
 | CPU-only fallback | ✅ | ✅ | ✅ (Apple Silicon via Metal planned) |
 
-- **.NET 8.0** — install the [runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) or publish self-contained
+- **.NET 10.0** — install the [runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) or publish self-contained
 - **Disk space** — models range from ~2 GB (Q4 7B) to ~40 GB (Q4 70B)
 - **VRAM** — 4 GB minimum for small models; 8–16 GB for 13B+ at full GPU offload
 
@@ -83,7 +85,7 @@ No background services. No terminal. No config files.
 
 ### Build from source
 
-**Prerequisites:** [.NET 8 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
+**Prerequisites:** [.NET 10 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)
 
 ```bash
 git clone https://github.com/your-org/homebred-llm.git

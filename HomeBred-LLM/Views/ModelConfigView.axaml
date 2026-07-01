@@ -85,6 +85,25 @@
                              Margin="0,0,0,16"
                              ScrollViewer.VerticalScrollBarVisibility="Auto" />
 
+                    <!-- Local API endpoint -->
+                    <CheckBox Content="Enable local API endpoint (OpenAI-compatible)"
+                              IsChecked="{Binding ApiServerEnabled, Mode=TwoWay}"
+                              Margin="0,0,0,8" />
+                    <StackPanel IsVisible="{Binding ApiServerEnabled}" Margin="0,0,0,16">
+                        <TextBlock Text="Port" Classes="label" />
+                        <TextBox Text="{Binding Config.ApiPort}" Margin="0,0,0,6" />
+                        <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,2">
+                            <Run Text="Bound to 127.0.0.1 only. Chat: " />
+                            <Run Text="{Binding Config.ApiPort, StringFormat='http://127.0.0.1:{0}/v1/chat/completions'}"
+                                 FontFamily="Consolas,monospace" />
+                        </TextBlock>
+                        <TextBlock Classes="muted" FontSize="11" TextWrapping="Wrap">
+                            <Run Text="Embeddings: " />
+                            <Run Text="{Binding Config.ApiPort, StringFormat='http://127.0.0.1:{0}/v1/embeddings'}"
+                                 FontFamily="Consolas,monospace" />
+                        </TextBlock>
+                    </StackPanel>
+
                     <!-- Buttons -->
                     <StackPanel Orientation="Horizontal">
                         <Button Content="💾 Save"

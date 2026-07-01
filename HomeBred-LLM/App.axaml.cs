@@ -32,6 +32,7 @@ public partial class App : Application
                 services.AddSingleton<GpuMetricsService>();
                 services.AddSingleton<AnalyticsRepository>();
                 services.AddSingleton<MetricsCollectorService>();
+                services.AddSingleton<ModelApiServerService>();
 
                 // VMs are singletons so MainViewModel can hold references to them
                 services.AddSingleton<ModelLibraryViewModel>();
@@ -43,13 +44,15 @@ public partial class App : Application
             })
             .Build();
 
-        // Create DB schema (no migration files needed)
+        // Create DB schema (no migration files needed) and patch existing databases
+        // that predate columns added later — see AppDbContextSchemaReconciler.
         Task.Run(async () =>
         {
             using var scope = AppHost.Services.CreateScope();
             var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AppDbContext>>();
             await using var db = await dbFactory.CreateDbContextAsync();
             await db.Database.EnsureCreatedAsync();
+            await db.ReconcileSchemaAsync();
         }).GetAwaiter().GetResult();
 
         // Pre-initialise ViewModels so the UI is ready immediately on first nav
@@ -67,6 +70,7 @@ public partial class App : Application
             desktop.Exit += (_, _) =>
             {
                 AppHost.Services.GetRequiredService<MetricsCollectorService>().Stop();
+                AppHost.Services.GetRequiredService<ModelApiServerService>().StopAll();
                 AppHost.Services.GetRequiredService<IInferenceService>().UnloadAll();
                 AppHost.StopAsync().GetAwaiter().GetResult();
                 AppHost.Dispose();

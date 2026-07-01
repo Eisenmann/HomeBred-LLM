@@ -19,5 +19,10 @@ public class ModelConfiguration
     public int BatchSize { get; set; } = 512;
     public int MaxTokens { get; set; } = 2048;
     public string SystemPrompt { get; set; } = "";
+
+    // Local OpenAI-compatible HTTP endpoint (127.0.0.1 only) for this model while it's running
+    public bool ApiServerEnabled { get; set; } = false;
+    public int ApiPort { get; set; } = 8080;
+
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

@@ -27,4 +27,8 @@ public interface IInferenceService
         InferenceRequest request,
         Action<InferenceStats> onDone,
         CancellationToken ct = default);
+
+    /// <summary>Returns one embedding vector per input string, in order.</summary>
+    Task<IReadOnlyList<float[]>> GetEmbeddingsAsync(
+        Guid modelId, IReadOnlyList<string> inputs, CancellationToken ct = default);
 }

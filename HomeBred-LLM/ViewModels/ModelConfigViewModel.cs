@@ -12,6 +12,16 @@ public partial class ModelConfigViewModel(IDbContextFactory<AppDbContext> dbFact
     [ObservableProperty] private ModelConfiguration? _config;
     [ObservableProperty] private string _saveStatus = "";
 
+    // ModelConfiguration is a plain EF entity (no INotifyPropertyChanged), so the
+    // API-server checkbox is mirrored here to reactively toggle the port field's
+    // visibility — writing straight to Config.ApiServerEnabled wouldn't notify the UI.
+    [ObservableProperty] private bool _apiServerEnabled;
+
+    partial void OnApiServerEnabledChanged(bool value)
+    {
+        if (Config is not null) Config.ApiServerEnabled = value;
+    }
+
     public async Task LoadAsync(Guid modelId)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
@@ -26,6 +36,7 @@ public partial class ModelConfigViewModel(IDbContextFactory<AppDbContext> dbFact
             Model.Config = cfg;
         }
         Config = Model.Config;
+        ApiServerEnabled = Config.ApiServerEnabled;
     }
 
     [RelayCommand]
@@ -50,6 +61,8 @@ public partial class ModelConfigViewModel(IDbContextFactory<AppDbContext> dbFact
             existing.BatchSize = Config.BatchSize;
             existing.MaxTokens = Config.MaxTokens;
             existing.SystemPrompt = Config.SystemPrompt;
+            existing.ApiServerEnabled = Config.ApiServerEnabled;
+            existing.ApiPort = Config.ApiPort;
             existing.UpdatedAt = DateTime.UtcNow;
         }
         await db.SaveChangesAsync();
@@ -72,6 +85,8 @@ public partial class ModelConfigViewModel(IDbContextFactory<AppDbContext> dbFact
         Config.BatchSize = 512;
         Config.MaxTokens = 2048;
         Config.SystemPrompt = "";
+        Config.ApiPort = 8080;
+        ApiServerEnabled = false;
         OnPropertyChanged(nameof(Config));
     }
 }

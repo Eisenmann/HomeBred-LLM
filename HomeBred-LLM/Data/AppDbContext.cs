@@ -56,3 +56,43 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
          .HasIndex(a => new { a.ModelId, a.RecordedAt });
     }
 }
+
+/// <summary>
+/// EnsureCreatedAsync only creates the schema for a brand-new database — it does
+/// nothing to a database that already exists, even if the entity model has since
+/// gained columns. This patches existing SQLite files in place so upgrades don't
+/// crash with "no such column". Add a check here whenever a new column is added
+/// to an existing table.
+/// </summary>
+public static class AppDbContextSchemaReconciler
+{
+    public static async Task ReconcileSchemaAsync(this AppDbContext db)
+    {
+        var existingColumns = await GetColumnsAsync(db, "ModelConfigurations");
+        if (existingColumns.Count == 0) return; // table doesn't exist yet — nothing to patch
+
+        if (!existingColumns.Contains("ApiServerEnabled"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE \"ModelConfigurations\" ADD COLUMN \"ApiServerEnabled\" INTEGER NOT NULL DEFAULT 0");
+
+        if (!existingColumns.Contains("ApiPort"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE \"ModelConfigurations\" ADD COLUMN \"ApiPort\" INTEGER NOT NULL DEFAULT 8080");
+    }
+
+    private static async Task<HashSet<string>> GetColumnsAsync(AppDbContext db, string tableName)
+    {
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open)
+            await conn.OpenAsync();
+
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info('{tableName}')";
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            columns.Add(reader.GetString(1)); // column 1 = "name"
+
+        return columns;
+    }
+}

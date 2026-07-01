@@ -15,7 +15,32 @@ namespace HomebredLLM.Services;
 /// </summary>
 public sealed class LlamaSharpService : IInferenceService, IDisposable
 {
-    private sealed record LoadedModel(LLamaWeights Weights, LLamaContext Context, SemaphoreSlim Lock);
+    private sealed class LoadedModel(LLamaWeights weights, LLamaContext context, string modelPath, ModelConfiguration config)
+    {
+        public LLamaWeights Weights { get; } = weights;
+        public LLamaContext Context { get; } = context;
+        public string ModelPath { get; } = modelPath;
+        public ModelConfiguration Config { get; } = config;
+        public SemaphoreSlim ChatLock { get; } = new(1, 1);
+
+        // The embedder needs its own context (created with Embeddings=true), so it's
+        // built lazily on first use rather than at load time — most models are only
+        // ever used for chat.
+        public LLamaEmbedder? Embedder;
+        public SemaphoreSlim EmbedderInitLock { get; } = new(1, 1);
+        public SemaphoreSlim EmbedLock { get; } = new(1, 1);
+
+        public void Dispose()
+        {
+            Embedder?.Dispose();
+            Context.Dispose();
+            Weights.Dispose();
+            ChatLock.Dispose();
+            EmbedderInitLock.Dispose();
+            EmbedLock.Dispose();
+        }
+    }
+
     private readonly ConcurrentDictionary<Guid, LoadedModel> _loaded = new();
 
     public bool IsLoaded(Guid modelId) => _loaded.ContainsKey(modelId);
@@ -43,7 +68,7 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
             return (w, c);
         });
 
-        _loaded[modelId] = new LoadedModel(weights, context, new SemaphoreSlim(1, 1));
+        _loaded[modelId] = new LoadedModel(weights, context, modelPath, config);
         progress?.Report("Model loaded.");
     }
 
@@ -51,9 +76,7 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
     {
         if (_loaded.TryRemove(modelId, out var m))
         {
-            m.Context.Dispose();
-            m.Weights.Dispose();
-            m.Lock.Dispose();
+            m.Dispose();
         }
     }
 
@@ -71,14 +94,22 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
         if (!_loaded.TryGetValue(request.ModelId, out var loaded))
             throw new InvalidOperationException("Model is not loaded. Call LoadAsync first.");
 
-        await loaded.Lock.WaitAsync(ct);
+        if (request.Messages.Count == 0)
+            throw new InvalidOperationException("No message to send.");
+
+        await loaded.ChatLock.WaitAsync(ct);
         try
         {
             var executor = new InteractiveExecutor(loaded.Context);
 
-            // Build prompt from message history
+            // The current turn (last message) is passed to ChatAsync below, which
+            // appends it to the session history itself — so history must exclude it
+            // here, or the model sees the current turn twice.
+            var priorMessages = request.Messages.Take(request.Messages.Count - 1);
+            var currentTurn = request.Messages[^1];
+
             var chatHistory = new ChatHistory();
-            foreach (var (role, content) in request.Messages)
+            foreach (var (role, content) in priorMessages)
             {
                 chatHistory.AddMessage(role switch
                 {
@@ -104,17 +135,15 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
 
             var session = new LLama.ChatSession(executor, chatHistory);
 
+            var promptText = string.Join("\n", request.Messages.Select(m => m.Content));
+            var promptTokens = loaded.Context.Tokenize(promptText, addBos: true, special: true).Length;
+
             var sw = Stopwatch.StartNew();
             float? ttft = null;
             int outputTokens = 0;
-            string fullReply = "";
-
-            // Build the last user message as the prompt
-            var lastUser = request.Messages.LastOrDefault(m => m.Role == MessageRole.User);
-            var prompt = lastUser.Content ?? "";
 
             await foreach (var text in session.ChatAsync(
-                new ChatHistory.Message(AuthorRole.User, prompt),
+                new ChatHistory.Message(AuthorRole.User, currentTurn.Content),
                 inferenceParams,
                 ct))
             {
@@ -123,7 +152,6 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
                     ttft = (float)sw.Elapsed.TotalMilliseconds;
 
                 outputTokens++;
-                fullReply += text;
                 yield return text;
             }
 
@@ -131,12 +159,63 @@ public sealed class LlamaSharpService : IInferenceService, IDisposable
             var totalMs = (float)sw.Elapsed.TotalMilliseconds;
             var tps = totalMs > 0 ? outputTokens / (totalMs / 1000f) : 0;
 
-            onDone(new InferenceStats(tps, ttft ?? 0, totalMs, 0, outputTokens));
+            onDone(new InferenceStats(tps, ttft ?? 0, totalMs, promptTokens, outputTokens));
         }
         finally
         {
-            loaded.Lock.Release();
+            loaded.ChatLock.Release();
         }
+    }
+
+    public async Task<IReadOnlyList<float[]>> GetEmbeddingsAsync(
+        Guid modelId, IReadOnlyList<string> inputs, CancellationToken ct = default)
+    {
+        if (!_loaded.TryGetValue(modelId, out var loaded))
+            throw new InvalidOperationException("Model is not loaded. Call LoadAsync first.");
+
+        var embedder = await GetOrCreateEmbedderAsync(loaded, ct);
+
+        await loaded.EmbedLock.WaitAsync(ct);
+        try
+        {
+            var results = new List<float[]>(inputs.Count);
+            foreach (var input in inputs)
+            {
+                var vectors = await embedder.GetEmbeddings(input, ct);
+                results.Add(vectors.Count > 0 ? vectors[0] : []);
+            }
+            return results;
+        }
+        finally
+        {
+            loaded.EmbedLock.Release();
+        }
+    }
+
+    private static async Task<LLamaEmbedder> GetOrCreateEmbedderAsync(LoadedModel loaded, CancellationToken ct)
+    {
+        if (loaded.Embedder is not null) return loaded.Embedder;
+
+        await loaded.EmbedderInitLock.WaitAsync(ct);
+        try
+        {
+            loaded.Embedder ??= await Task.Run(() =>
+            {
+                var embedParams = new ModelParams(loaded.ModelPath)
+                {
+                    ContextSize = (uint)loaded.Config.ContextSize,
+                    GpuLayerCount = loaded.Config.GpuLayerCount,
+                    Embeddings = true,
+                };
+                return new LLamaEmbedder(loaded.Weights, embedParams);
+            }, ct);
+        }
+        finally
+        {
+            loaded.EmbedderInitLock.Release();
+        }
+
+        return loaded.Embedder;
     }
 
     public void Dispose() => UnloadAll();

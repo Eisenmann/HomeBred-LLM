@@ -70,6 +70,8 @@ public sealed class GpuMetricsService : IDisposable
                 _nvmlGetTemp   = Bind<NvmlGetTempFunc>  (_nvmlLib, "nvmlDeviceGetTemperature");
 
                 if (_nvmlInit!() == 0) { _nvmlInitialized = true; break; }
+                NativeLibrary.Free(_nvmlLib);
+                _nvmlLib = IntPtr.Zero;
             }
             catch { NativeLibrary.Free(_nvmlLib); _nvmlLib = IntPtr.Zero; }
         }

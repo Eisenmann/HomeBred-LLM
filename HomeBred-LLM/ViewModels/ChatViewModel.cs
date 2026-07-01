@@ -104,12 +104,15 @@ public partial class ChatViewModel(
             db.ChatMessages.Add(userMsg);
             await db.SaveChangesAsync();
         }
-        Dispatcher.UIThread.Post(() => Messages.Add(userMsg));
-
-        // Build history for context
+        // Build history before queuing the UI update below — Dispatcher.Post runs
+        // later on the message loop, so reading Messages right after posting would
+        // miss the message that was just sent.
         var history = Messages
             .Select(m => (m.Role, m.Content))
+            .Append((userMsg.Role, userMsg.Content))
             .ToList();
+
+        Dispatcher.UIThread.Post(() => Messages.Add(userMsg));
 
         await using var db2 = await dbFactory.CreateDbContextAsync();
         var cfg = await db2.ModelConfigurations.FirstOrDefaultAsync(c => c.ModelId == SelectedModel.Id)
