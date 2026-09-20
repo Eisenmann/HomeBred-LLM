@@ -16,8 +16,11 @@ public partial class ModelConfigViewModel(
     [ObservableProperty] private ModelConfiguration? _config;
     [ObservableProperty] private string _saveStatus = "";
 
-    // GGUF LoRA adapters attached to this model. Applied at load time; changing them
-    // requires a Stop→Start of the model.
+    // LoRA adapters attached to this model. Only supported for GGUF models
+    // (applied at load time via LlamaCppInferenceService/LLamaSharp). ONNX
+    // Runtime GenAI has no adapter support — they must be merged into the
+    // base model before exporting to ONNX; the view blocks the import with
+    // an informational message for ONNX models instead of opening a picker.
     [ObservableProperty] private ObservableCollection<LoraAdapterConfig> _adapters = [];
     [ObservableProperty] private string _adapterError = "";
 
@@ -53,7 +56,19 @@ public partial class ModelConfigViewModel(
             Model.LoraAdapters.OrderBy(a => a.CreatedAt));
     }
 
-    /// <summary>Imports a picked GGUF adapter, persists it, and adds a row. Called from the view's file picker.</summary>
+    /// <summary>
+    /// Shows an informational message that LoRA adapters are not supported by
+    /// the ONNX Runtime GenAI inference engine. Called from the view's adapter
+    /// button click handler.
+    /// </summary>
+    public Task ShowAdapterNotSupportedAsync()
+    {
+        AdapterError = "LoRA adapters are not supported by ONNX Runtime GenAI. " +
+                       "Merge the adapter into the base model before exporting to ONNX.";
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Imports a picked adapter, persists it, and adds a row. Called from the view's file picker.</summary>
     public async Task AddAdapterAsync(string sourcePath)
     {
         AdapterError = "";

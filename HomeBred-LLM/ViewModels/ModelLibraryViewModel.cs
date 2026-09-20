@@ -15,7 +15,8 @@ public partial class ModelLibraryViewModel(
     IInferenceService inference,
     HuggingFaceService hf,
     MetricsCollectorService metricsCollector,
-    ModelApiServerService apiServer) : ObservableObject
+    ModelApiServerService apiServer,
+    LocalModelImportService localImport) : ObservableObject
 {
     // ── Local models ────────────────────────────────────────────────────────
     [ObservableProperty] private ObservableCollection<LocalModel> _localModels = [];
@@ -23,6 +24,10 @@ public partial class ModelLibraryViewModel(
     [ObservableProperty] private string _loadingStatus = "";
     [ObservableProperty] private string _loadErrorDetails = "";
     [ObservableProperty] private bool _hasLoadError;
+    [ObservableProperty] private bool _isImporting;
+    [ObservableProperty] private string _importStatus = "";
+    [ObservableProperty] private string _importErrorDetails = "";
+    [ObservableProperty] private bool _hasImportError;
 
     // ── HuggingFace search ─────────────────────────────────────────────────
     [ObservableProperty] private string _hfSearchQuery = "";
@@ -41,6 +46,47 @@ public partial class ModelLibraryViewModel(
         await using var db = await dbFactory.CreateDbContextAsync();
         var models = await db.Models.Include(m => m.Config).OrderByDescending(m => m.CreatedAt).ToListAsync();
         LocalModels = new ObservableCollection<LocalModel>(models);
+    }
+
+    /// <summary>Imports a locally-picked ONNX model directory and adds it to the library.</summary>
+    public async Task ImportLocalModelAsync(string sourcePath)
+    {
+        if (IsImporting) return;
+        IsImporting = true;
+        HasImportError = false;
+        ImportErrorDetails = "";
+        ImportStatus = "Reading model metadata…";
+
+        try
+        {
+            var model = await localImport.ImportAsync(sourcePath);
+
+            if (Dispatcher.UIThread.CheckAccess())
+            {
+                LocalModels.Insert(0, model);
+                if (SelectedModel is null) SelectedModel = model;
+                ImportStatus = $"Imported {model.Name} ✓";
+            }
+            else
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    LocalModels.Insert(0, model);
+                    if (SelectedModel is null) SelectedModel = model;
+                    ImportStatus = $"Imported {model.Name} ✓";
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            ImportStatus = $"Import failed: {ex.Message}";
+            ImportErrorDetails = ex.ToString();
+            HasImportError = true;
+        }
+        finally
+        {
+            IsImporting = false;
+        }
     }
 
     [RelayCommand]
@@ -70,7 +116,7 @@ public partial class ModelLibraryViewModel(
     [RelayCommand]
     private async Task SelectHfModelAsync(HfModelInfo model)
     {
-        var files = await hf.ListGgufFilesAsync(model.RepoId);
+        var files = await hf.ListOnnxFilesAsync(model.RepoId);
         HfFiles = new ObservableCollection<HfFileInfo>(files);
     }
 
@@ -84,7 +130,7 @@ public partial class ModelLibraryViewModel(
         DownloadErrorDetails = "";
 
         var modelName = $"{SelectedHfModel.ModelName} {file.Quantization}".Trim();
-        var destPath = Path.Combine(AppPaths.ModelsDirectory, Path.GetFileName(file.Filename));
+        var destDir = Path.Combine(AppPaths.ModelsDirectory, SelectedHfModel.ModelName);
 
         // Create DB records
         await using var db = await dbFactory.CreateDbContextAsync();
@@ -103,7 +149,7 @@ public partial class ModelLibraryViewModel(
             ModelId = model.Id,
             HfRepoId = SelectedHfModel.RepoId,
             HfFilename = file.Filename,
-            TotalBytes = file.SizeBytes,
+            TotalBytes = file.SizeBytes ?? 0,
             Status = Models.DownloadStatus.Downloading,
             StartedAt = DateTime.UtcNow,
         };
@@ -124,14 +170,17 @@ public partial class ModelLibraryViewModel(
 
         try
         {
-            await hf.DownloadFileAsync(SelectedHfModel.RepoId, file.Filename, destPath, progress);
+            // For ONNX models, file.Filename is a directory path (e.g. "onnx/")
+            // We need to download all files in that directory.
+            Directory.CreateDirectory(destDir);
+            await hf.DownloadFileAsync(SelectedHfModel.RepoId, file.Filename, destDir, progress);
 
             string? mmprojPath = null;
             var mmproj = await hf.FindMmprojFileAsync(SelectedHfModel.RepoId);
             if (mmproj is not null)
             {
                 DownloadStatus = "Vision support detected — downloading projector…";
-                mmprojPath = Path.Combine(AppPaths.ModelsDirectory, Path.GetFileName(mmproj.Filename));
+                mmprojPath = Path.Combine(destDir, Path.GetFileName(mmproj.Filename));
                 await hf.DownloadFileAsync(SelectedHfModel.RepoId, mmproj.Filename, mmprojPath);
             }
 
@@ -139,8 +188,8 @@ public partial class ModelLibraryViewModel(
             var m = await db2.Models.FindAsync(model.Id);
             if (m != null)
             {
-                m.LocalPath = destPath;
-                m.FileSizeBytes = new FileInfo(destPath).Length;
+                m.LocalPath = destDir;
+                m.FileSizeBytes = new DirectoryInfo(destDir).EnumerateFiles().Sum(f => f.Length);
                 m.MmprojPath = mmprojPath;
                 m.Status = ModelStatus.Ready;
                 m.UpdatedAt = DateTime.UtcNow;
@@ -150,7 +199,7 @@ public partial class ModelLibraryViewModel(
             await db2.SaveChangesAsync();
 
             model.Status = ModelStatus.Ready;
-            model.LocalPath = destPath;
+            model.LocalPath = destDir;
             model.MmprojPath = mmprojPath;
             DownloadStatus = mmprojPath is not null
                 ? "Download complete! Vision support detected."
@@ -162,8 +211,7 @@ public partial class ModelLibraryViewModel(
             DownloadStatus = $"Error: {ex.Message}";
             DownloadErrorDetails = ex.ToString();
             HasDownloadError = true;
-            if (File.Exists(destPath))
-                try { File.Delete(destPath); } catch { /* ignore locked file */ }
+            try { if (Directory.Exists(destDir)) Directory.Delete(destDir, true); } catch { /* ignore locked dir */ }
         }
         finally
         {
@@ -179,7 +227,8 @@ public partial class ModelLibraryViewModel(
     [RelayCommand]
     private async Task StartModelAsync(LocalModel model)
     {
-        if (model.LocalPath is null || !File.Exists(model.LocalPath))
+        // ONNX models live in a directory; GGUF models are a single file.
+        if (model.LocalPath is null || !(Directory.Exists(model.LocalPath) || File.Exists(model.LocalPath)))
         {
             LoadingStatus = "Model file not found on disk.";
             return;
@@ -259,8 +308,8 @@ public partial class ModelLibraryViewModel(
         apiServer.Stop(model.Id);
         inference.Unload(model.Id);
 
-        if (model.LocalPath is not null && File.Exists(model.LocalPath))
-            try { File.Delete(model.LocalPath); } catch { /* ignore locked file */ }
+        if (model.LocalPath is not null && Directory.Exists(model.LocalPath))
+            try { Directory.Delete(model.LocalPath, true); } catch { /* ignore locked dir */ }
 
         await using var db = await dbFactory.CreateDbContextAsync();
         var m = await db.Models.FindAsync(model.Id);
