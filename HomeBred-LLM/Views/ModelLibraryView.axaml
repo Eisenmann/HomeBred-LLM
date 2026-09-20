@@ -16,16 +16,44 @@
             <!-- ── Local models ─────────────────────────────────────────── -->
             <Border Classes="card" Margin="0,0,0,20">
                 <StackPanel>
-                    <TextBlock Text="Local Models"
-                               FontSize="14" FontWeight="SemiBold"
-                               Foreground="{StaticResource TextSecondaryBrush}"
-                               Margin="0,0,0,12" />
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+                        <TextBlock Grid.Column="0"
+                                   Text="Local Models"
+                                   FontSize="14" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center" />
+                        <Button Grid.Column="1"
+                                Content="📂 Import local GGUF…"
+                                Classes="accent"
+                                Padding="12,6"
+                                Click="ImportLocalModel_Click"
+                                IsEnabled="{Binding IsImporting,
+                                    Converter={StaticResource BoolVis},
+                                    ConverterParameter=inverse}">
+                        </Button>
+                    </Grid>
 
-                    <TextBlock Text="No models downloaded yet."
+                    <TextBlock Text="No models yet — download from HuggingFace or import a local GGUF file."
                                Classes="muted"
                                IsVisible="{Binding LocalModels.Count,
                                    Converter={StaticResource BoolVis},
                                    ConverterParameter=inverse}" />
+
+                    <TextBlock Text="{Binding ImportStatus}"
+                               Classes="muted" Margin="0,4,0,0" />
+                    <Expander Header="Show import error details"
+                              IsVisible="{Binding HasImportError}"
+                              Margin="0,4,0,0">
+                        <TextBox Text="{Binding ImportErrorDetails}"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 FontFamily="Consolas,monospace"
+                                 FontSize="11"
+                                 MaxHeight="240"
+                                 Margin="0,4,0,0"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                    </Expander>
 
                     <ItemsControl ItemsSource="{Binding LocalModels}">
                         <ItemsControl.ItemTemplate>
@@ -58,6 +86,15 @@
                                                     <TextBlock Text="👁 Vision"
                                                                FontSize="10" FontWeight="Medium"
                                                                Foreground="White" />
+                                                </Border>
+                                                <Border Background="#F59E0B"
+                                                        CornerRadius="4" Padding="5,1" Margin="8,0,0,0"
+                                                        IsVisible="{Binding HasWarning}"
+                                                        ToolTip.Tip="{Binding Warnings}">
+                                                    <TextBlock FontSize="10" FontWeight="Medium"
+                                                               Foreground="White">
+                                                        <Run Text="⚠ " /><Run Text="{Binding Warnings}" />
+                                                    </TextBlock>
                                                 </Border>
                                             </StackPanel>
                                             <TextBlock Classes="muted" Margin="0,3,0,0">

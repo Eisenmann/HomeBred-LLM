@@ -44,6 +44,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
              .OnDelete(DeleteBehavior.Cascade);
 
             e.Property(m => m.Status).HasConversion<string>();
+            e.Property(m => m.Format).HasConversion<string>();
         });
 
         b.Entity<ChatSession>()
@@ -101,6 +102,19 @@ public static class AppDbContextSchemaReconciler
         if (modelColumns.Count > 0 && !modelColumns.Contains("MmprojPath"))
             await db.Database.ExecuteSqlRawAsync(
                 "ALTER TABLE \"Models\" ADD COLUMN \"MmprojPath\" TEXT NULL");
+
+        // Added for GGUF v2/v3 support: existing rows all predate GGUF import,
+        // so they default to the engine they've always used (Onnx).
+        if (modelColumns.Count > 0 && !modelColumns.Contains("Format"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE \"Models\" ADD COLUMN \"Format\" TEXT NOT NULL DEFAULT 'Onnx'");
+
+        // Added for GGUF import-time diagnostics: non-blocking warnings
+        // (e.g. naming mismatch, vocab/embedding size mismatch) shown as a
+        // badge in the Model Library. NULL means no warnings.
+        if (modelColumns.Count > 0 && !modelColumns.Contains("Warnings"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE \"Models\" ADD COLUMN \"Warnings\" TEXT NULL");
 
         var attachmentColumns = await GetColumnsAsync(db, "ChatAttachments");
         if (attachmentColumns.Count == 0)

@@ -1,0 +1,3 @@
+- [ ] Analyze project structure
+- [ ] Build the project
+- [ ] Run the application

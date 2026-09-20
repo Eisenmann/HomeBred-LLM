@@ -14,9 +14,25 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Inference engine — LLamaSharp with CUDA 12 and CPU fallback -->
+    <!-- Inference engine — ONNX Runtime GenAI for running LLM models in ONNX format.
+         The DirectML package provides GPU acceleration on Windows via DirectX 12.
+         Models are loaded from a directory containing model.onnx, config.json,
+         and tokenizer files (produced by HuggingFace's optimum-export pipeline). -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" Version="0.14.1" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI.DirectML" Version="0.14.1" />
+
+    <!-- GGUF inference (v2/v3) — LLamaSharp is the managed binding to llama.cpp.
+         It needs exactly one native backend package alongside it, matching the
+         machine this ships on. Swap the line below for the right one:
+           LLamaSharp.Backend.Cpu     - no GPU, any OS (safest default)
+           LLamaSharp.Backend.Cuda12  - NVIDIA GPUs, Windows/Linux
+           LLamaSharp.Backend.Vulkan  - AMD/Intel/NVIDIA GPUs via Vulkan
+           LLamaSharp.Backend.Metal   - Apple Silicon
+         Only one backend package should be referenced at a time.
+         Bumped 0.21.0 -> 0.27.0 to get qwen3 architecture support in the
+         bundled llama.cpp native build (0.21.0 rejects qwen3 models with
+         "unknown model architecture: 'qwen3'"). -->
     <PackageReference Include="LLamaSharp" Version="0.27.0" />
-    <PackageReference Include="LLamaSharp.Backend.Cuda12" Version="0.27.0" />
     <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.27.0" />
 
     <!-- Database -->

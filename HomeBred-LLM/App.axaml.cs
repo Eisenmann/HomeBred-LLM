@@ -3,6 +3,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using HomebredLLM.Data;
 using HomebredLLM.Services;
+using HomebredLLM.Services.Gguf;
 using HomebredLLM.ViewModels;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -27,13 +28,31 @@ public partial class App : Application
                 services.AddDbContextFactory<AppDbContext>(opt =>
                     opt.UseSqlite($"Data Source={AppPaths.DatabaseFile}"));
 
-                services.AddSingleton<IInferenceService, LlamaSharpService>();
+                // Two concrete inference engines — one per model format — behind a
+                // single router registered as IInferenceService. GGUF (v2/v3) support
+                // runs through LlamaCppInferenceService via LLamaSharp; ONNX exports
+                // keep using OnnxRuntimeService as before.
+                services.AddSingleton<OnnxRuntimeService>();
+
+                // Native llama.cpp log capture — registered once here, before any
+                // model can be loaded, so the buffer can catch whatever the native
+                // loader prints on a load failure (see HOMEBRED_LLM_NATIVE_LOG_CAPTURE_GUIDE.md).
+                // The buffer lives for the app lifetime; llama.cpp's native callback
+                // must stay rooted (the buffer holds a strong reference).
+                services.AddSingleton<NativeLogBuffer>();
+
+                services.AddSingleton<LlamaCppInferenceService>();
+                services.AddSingleton<IInferenceService, InferenceServiceRouter>();
+
                 services.AddSingleton<HuggingFaceService>();
                 services.AddSingleton<GpuMetricsService>();
                 services.AddSingleton<AnalyticsRepository>();
                 services.AddSingleton<MetricsCollectorService>();
                 services.AddSingleton<ModelApiServerService>();
                 services.AddSingleton<LoraImportService>();
+                services.AddSingleton<OnnxModelMetadataReader>();
+                services.AddSingleton<GgufMetadataReader>();
+                services.AddSingleton<LocalModelImportService>();
 
                 // VMs are singletons so MainViewModel can hold references to them
                 services.AddSingleton<ModelLibraryViewModel>();
@@ -44,6 +63,12 @@ public partial class App : Application
                 services.AddSingleton<MainWindow>();
             })
             .Build();
+
+        // Install llama.cpp's native log callback before anything can touch the
+        // native library. This must happen before the first LLamaWeights.LoadFromFile
+        // (or any other native call) so the buffer actually captures a load's
+        // diagnostics instead of silently missing them.
+        AppHost.Services.GetRequiredService<NativeLogBuffer>().RegisterNativeLogCallback();
 
         // Create DB schema (no migration files needed) and patch existing databases
         // that predate columns added later — see AppDbContextSchemaReconciler.

@@ -36,7 +36,9 @@ public sealed class HuggingFaceService
 
     public async Task<List<HfModelInfo>> SearchModelsAsync(string query, int limit = 20, CancellationToken ct = default)
     {
-        var url = $"https://huggingface.co/api/models?search={Uri.EscapeDataString(query)}&filter=gguf&sort=downloads&direction=-1&limit={limit}";
+        // Search for ONNX models on HuggingFace. The onnx filter returns models
+        // that have ONNX files in their repository (exported via optimum-export).
+        var url = $"https://huggingface.co/api/models?search={Uri.EscapeDataString(query)}&filter=onnx&sort=downloads&direction=-1&limit={limit}";
         var resp = await _http.GetFromJsonAsync<List<HfModelApiItem>>(url, ct) ?? [];
         return resp.Select(m => new HfModelInfo(
             m.Id,
@@ -48,38 +50,47 @@ public sealed class HuggingFaceService
         )).ToList();
     }
 
-    public async Task<List<HfFileInfo>> ListGgufFilesAsync(string repoId, CancellationToken ct = default)
+    public async Task<List<HfFileInfo>> ListOnnxFilesAsync(string repoId, CancellationToken ct = default)
     {
         var url = $"https://huggingface.co/api/models/{repoId}";
         var resp = await _http.GetFromJsonAsync<HfModelDetail>(url, ct);
         if (resp?.Siblings is null) return [];
 
-        return resp.Siblings
-            .Where(s => s.Rfilename.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
-            .Where(s => !IsMmprojFile(s.Rfilename))
-            .Select(s => new HfFileInfo(
-                s.Rfilename,
-                s.Size,
-                ParseQuantization(s.Rfilename)))
+        // ONNX models are stored in subdirectories (e.g. onnx/model.onnx,
+        // onnx/model.onnx.data). Group by directory to present each variant
+        // as a single downloadable entry.
+        var onnxDirs = resp.Siblings
+            .Where(s => s.Rfilename.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase) ||
+                        s.Rfilename.EndsWith(".onnx.data", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(s =>
+            {
+                var parts = s.Rfilename.Split('/');
+                return parts.Length > 1 ? string.Join('/', parts[..^1]) : ".";
+            })
+            .Select(g => new HfFileInfo(
+                g.Key,
+                g.Sum(s => s.Size ?? 0),
+                ParseQuantization(g.Key)))
             .ToList();
+
+        return onnxDirs;
     }
 
-    /// <summary>Vision models ship a companion "mmproj" GGUF (the CLIP/vision projector)
-    /// alongside the text model — find it so the caller can download it too.</summary>
+    /// <summary>ONNX vision models may ship a separate projector directory.
+    /// Find it so the caller can download it too.</summary>
     public async Task<HfFileInfo?> FindMmprojFileAsync(string repoId, CancellationToken ct = default)
     {
         var url = $"https://huggingface.co/api/models/{repoId}";
         var resp = await _http.GetFromJsonAsync<HfModelDetail>(url, ct);
         if (resp?.Siblings is null) return null;
 
+        // Look for projector files in common ONNX vision model locations
         var mmproj = resp.Siblings.FirstOrDefault(s =>
-            s.Rfilename.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) && IsMmprojFile(s.Rfilename));
+            s.Rfilename.Contains("mmproj", StringComparison.OrdinalIgnoreCase) ||
+            s.Rfilename.Contains("projector", StringComparison.OrdinalIgnoreCase));
 
         return mmproj is null ? null : new HfFileInfo(mmproj.Rfilename, mmproj.Size, null);
     }
-
-    private static bool IsMmprojFile(string filename) =>
-        filename.Contains("mmproj", StringComparison.OrdinalIgnoreCase);
 
     public async Task DownloadFileAsync(
         string repoId,
