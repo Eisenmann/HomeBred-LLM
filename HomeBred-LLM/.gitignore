@@ -33,3 +33,6 @@ Thumbs.db
 *.gguf
 *.bin
 *.ggml
+
+# Locally built llama.cpp (see ../native/llama.cpp-hbec)
+native/

@@ -74,6 +74,17 @@
     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="8.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="TieringVerificationTests" />
+  </ItemGroup>
+
+  <!-- Optional locally built llama.cpp (e.g. the per-expert VRAM cache build from
+       ../native/llama.cpp-hbec). When present it is copied to <output>/native and
+       loaded instead of the LLamaSharp backend package's natives. -->
+  <ItemGroup Condition="Exists('native')">
+    <None Include="native\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" LinkBase="native" />
+  </ItemGroup>
+
   <!-- The ONNX packages' props files add None+CopyToOutputDirectory items for their
        Windows natives (onnxruntime-genai.dll, onnxruntime.dll,
        onnxruntime_providers_shared.dll) with conditions based only on PlatformTarget,

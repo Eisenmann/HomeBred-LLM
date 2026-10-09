@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace HomebredLLM.Models;
 
@@ -40,6 +41,14 @@ public class LocalModel
     public List<ChatSession> ChatSessions { get; set; } = [];
     public List<DownloadJob> DownloadJobs { get; set; } = [];
     public List<LoraAdapterConfig> LoraAdapters { get; set; } = [];
+    public MemoryProfile? MemoryProfile { get; set; }
+    public List<ExpertUsageSnapshot> ExpertUsageSnapshots { get; set; } = [];
+
+    // Hardware-fit badge, computed by the Model Library (not persisted).
+    [NotMapped] public string? FitLabel { get; set; }
+    [NotMapped] public string FitColor { get; set; } = "#6B7280";
+    [NotMapped] public string? FitDetail { get; set; }
+    [NotMapped] public bool HasFit => !string.IsNullOrEmpty(FitLabel);
 
     // Computed for Avalonia IsVisible bindings (replaces WPF DataTrigger)
     public bool HasWarning => !string.IsNullOrWhiteSpace(Warnings);

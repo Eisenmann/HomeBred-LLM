@@ -87,6 +87,14 @@
                                                                FontSize="10" FontWeight="Medium"
                                                                Foreground="White" />
                                                 </Border>
+                                                <Border Background="{Binding FitColor}"
+                                                        CornerRadius="4" Padding="5,1" Margin="8,0,0,0"
+                                                        IsVisible="{Binding HasFit}"
+                                                        ToolTip.Tip="{Binding FitDetail}">
+                                                    <TextBlock Text="{Binding FitLabel}"
+                                                               FontSize="10" FontWeight="Medium"
+                                                               Foreground="White" />
+                                                </Border>
                                                 <Border Background="#F59E0B"
                                                         CornerRadius="4" Padding="5,1" Margin="8,0,0,0"
                                                         IsVisible="{Binding HasWarning}"
@@ -216,7 +224,7 @@
                                         BorderBrush="{StaticResource BorderBrush}"
                                         BorderThickness="1" CornerRadius="6"
                                         Padding="10,8" Margin="0,0,0,4">
-                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto">
                                         <TextBlock Grid.Column="0"
                                                    Text="{Binding Filename}"
                                                    Foreground="{StaticResource TextPrimaryBrush}"
@@ -234,13 +242,21 @@
                                                    Classes="muted"
                                                    VerticalAlignment="Center"
                                                    Margin="0,0,8,0" />
-                                        <Button Grid.Column="3"
+                                        <Border Grid.Column="3"
+                                                Background="{Binding FitColor}"
+                                                CornerRadius="4" Padding="6,2" Margin="0,0,8,0"
+                                                VerticalAlignment="Center"
+                                                IsVisible="{Binding HasFit}"
+                                                ToolTip.Tip="{Binding FitDetail}">
+                                            <TextBlock Text="{Binding FitLabel}" FontSize="10" Foreground="White" />
+                                        </Border>
+                                        <Button Grid.Column="4"
                                                 Content="⬇ Download"
                                                 Classes="accent"
                                                 Padding="10,5"
                                                 Command="{Binding DataContext.DownloadFileCommand,
                                                     RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type UserControl}}}"
-                                                CommandParameter="{Binding}" />
+                                                CommandParameter="{Binding File}" />
                                     </Grid>
                                 </Border>
                             </DataTemplate>

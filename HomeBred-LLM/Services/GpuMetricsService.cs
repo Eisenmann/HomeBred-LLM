@@ -3,6 +3,13 @@ using System.Runtime.InteropServices;
 
 namespace HomebredLLM.Services;
 
+public record GpuStaticInfo(
+    string? Name,
+    long VramTotalBytes,
+    long VramFreeBytes,
+    double? MemoryBandwidthGBs,
+    double? PcieBandwidthGBs);
+
 public record GpuSnapshot(
     float? GpuUtilPct,
     float? GpuMemUsedMb,
@@ -31,6 +38,10 @@ public sealed class GpuMetricsService : IDisposable
     private delegate int NvmlGetUtilFunc(IntPtr device, out NvmlUtilization util);
     private delegate int NvmlGetMemFunc(IntPtr device, out NvmlMemory mem);
     private delegate int NvmlGetTempFunc(IntPtr device, int sensor, out uint temp);
+    private delegate int NvmlGetNameFunc(IntPtr device, byte[] name, uint length);
+    private delegate int NvmlGetUIntFunc(IntPtr device, out uint value);
+    private delegate int NvmlGetClockFunc(IntPtr device, int clockType, out uint mhz);
+    private delegate int NvmlGetPcieThroughputFunc(IntPtr device, int counter, out uint kbPerSec);
 
     private NvmlInitFunc?      _nvmlInit;
     private NvmlShutdownFunc?  _nvmlShutdown;
@@ -38,6 +49,12 @@ public sealed class GpuMetricsService : IDisposable
     private NvmlGetUtilFunc?   _nvmlGetUtil;
     private NvmlGetMemFunc?    _nvmlGetMem;
     private NvmlGetTempFunc?   _nvmlGetTemp;
+    private NvmlGetNameFunc?   _nvmlGetName;
+    private NvmlGetUIntFunc?   _nvmlGetBusWidth;
+    private NvmlGetClockFunc?  _nvmlGetMaxClock;
+    private NvmlGetUIntFunc?   _nvmlGetPcieGen;
+    private NvmlGetUIntFunc?   _nvmlGetPcieWidth;
+    private NvmlGetPcieThroughputFunc? _nvmlGetPcieThroughput;
 
     // ── CPU sampling ───────────────────────────────────────────────────────
 
@@ -69,6 +86,15 @@ public sealed class GpuMetricsService : IDisposable
                 _nvmlGetMem    = Bind<NvmlGetMemFunc>   (_nvmlLib, "nvmlDeviceGetMemoryInfo");
                 _nvmlGetTemp   = Bind<NvmlGetTempFunc>  (_nvmlLib, "nvmlDeviceGetTemperature");
 
+                // Optional extras (older drivers may lack some) — used for bandwidth
+                // estimates and PCIe throughput analytics.
+                _nvmlGetName           = TryBind<NvmlGetNameFunc>(_nvmlLib, "nvmlDeviceGetName");
+                _nvmlGetBusWidth       = TryBind<NvmlGetUIntFunc>(_nvmlLib, "nvmlDeviceGetMemoryBusWidth");
+                _nvmlGetMaxClock       = TryBind<NvmlGetClockFunc>(_nvmlLib, "nvmlDeviceGetMaxClockInfo");
+                _nvmlGetPcieGen        = TryBind<NvmlGetUIntFunc>(_nvmlLib, "nvmlDeviceGetMaxPcieLinkGeneration");
+                _nvmlGetPcieWidth      = TryBind<NvmlGetUIntFunc>(_nvmlLib, "nvmlDeviceGetMaxPcieLinkWidth");
+                _nvmlGetPcieThroughput = TryBind<NvmlGetPcieThroughputFunc>(_nvmlLib, "nvmlDeviceGetPcieThroughput");
+
                 if (_nvmlInit!() == 0) { _nvmlInitialized = true; break; }
                 NativeLibrary.Free(_nvmlLib);
                 _nvmlLib = IntPtr.Zero;
@@ -79,6 +105,9 @@ public sealed class GpuMetricsService : IDisposable
 
     private static T Bind<T>(IntPtr lib, string name) where T : Delegate =>
         Marshal.GetDelegateForFunctionPointer<T>(NativeLibrary.GetExport(lib, name));
+
+    private static T? TryBind<T>(IntPtr lib, string name) where T : Delegate =>
+        NativeLibrary.TryGetExport(lib, name, out var fn) ? Marshal.GetDelegateForFunctionPointer<T>(fn) : null;
 
     private void InitCpu()
     {
@@ -165,6 +194,62 @@ public sealed class GpuMetricsService : IDisposable
             _getCpu?.Invoke() ?? 0f,
             Math.Max(0f, ramUsedMb),
             ramTotalMb);
+    }
+
+    public bool HasNvml => _nvmlInitialized;
+
+    /// <summary>
+    /// Static facts about GPU 0 for the tier planner: name, VRAM, peak memory
+    /// bandwidth (bus width × max memory clock × 2 for DDR) and PCIe link
+    /// bandwidth. Null when NVML is unavailable.
+    /// </summary>
+    public GpuStaticInfo? GetStaticInfo()
+    {
+        if (!_nvmlInitialized) return null;
+        try
+        {
+            _nvmlGetHandle!(0, out var dev);
+            string? name = null;
+            if (_nvmlGetName is not null)
+            {
+                var buf = new byte[96];
+                if (_nvmlGetName(dev, buf, (uint)buf.Length) == 0)
+                    name = System.Text.Encoding.ASCII.GetString(buf).TrimEnd('\0');
+            }
+
+            _nvmlGetMem!(dev, out var mem);
+
+            double? bandwidth = null;
+            if (_nvmlGetBusWidth is not null && _nvmlGetMaxClock is not null &&
+                _nvmlGetBusWidth(dev, out var busBits) == 0 &&
+                _nvmlGetMaxClock(dev, 2 /* NVML_CLOCK_MEM */, out var memMhz) == 0 && busBits > 0 && memMhz > 0)
+                bandwidth = busBits / 8.0 * memMhz * 2 * 1e6 / 1e9;
+
+            double? pcie = null;
+            if (_nvmlGetPcieGen is not null && _nvmlGetPcieWidth is not null &&
+                _nvmlGetPcieGen(dev, out var gen) == 0 && _nvmlGetPcieWidth(dev, out var lanes) == 0)
+            {
+                var perLane = gen switch { 1 => 0.25, 2 => 0.5, 3 => 0.985, 4 => 1.969, 5 => 3.938, _ => 7.877 };
+                pcie = perLane * lanes;
+            }
+
+            return new GpuStaticInfo(name, (long)mem.Total, (long)mem.Free, bandwidth, pcie);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Current PCIe RX/TX throughput of GPU 0 in MB/s (NVML samples over ~20 ms).</summary>
+    public (float RxMbps, float TxMbps)? SamplePcie()
+    {
+        if (!_nvmlInitialized || _nvmlGetPcieThroughput is null) return null;
+        try
+        {
+            _nvmlGetHandle!(0, out var dev);
+            if (_nvmlGetPcieThroughput(dev, 1 /* RX */, out var rx) != 0) return null;
+            if (_nvmlGetPcieThroughput(dev, 0 /* TX */, out var tx) != 0) return null;
+            return (rx / 1024f, tx / 1024f);
+        }
+        catch { return null; }
     }
 
     public void Dispose()

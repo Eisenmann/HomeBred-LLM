@@ -1,7 +1,9 @@
 <UserControl x:Class="HomebredLLM.Views.AnalyticsView"
              xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:lvc="using:LiveChartsCore.SkiaSharpView.Avalonia">
+             xmlns:lvc="using:LiveChartsCore.SkiaSharpView.Avalonia"
+             xmlns:views="using:HomebredLLM.Views"
+             xmlns:vm="using:HomebredLLM.ViewModels">
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="24">
@@ -103,6 +105,31 @@
                 </Border>
             </UniformGrid>
 
+            <!-- ── Memory tiers (live) ────────────────────────────────── -->
+            <Border Classes="card" Margin="0,0,0,16">
+                <StackPanel>
+                    <Grid ColumnDefinitions="*,Auto,Auto">
+                        <TextBlock Text="Memory tiers" Classes="label" />
+                        <StackPanel Grid.Column="1" Margin="0,0,16,0">
+                            <TextBlock Text="Avg decode" Classes="muted" />
+                            <TextBlock Text="{Binding AvgDecodeTps}" FontWeight="Bold" Foreground="{StaticResource SuccessBrush}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Avg prefill" Classes="muted" />
+                            <TextBlock Text="{Binding AvgPrefillTps}" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" />
+                        </StackPanel>
+                    </Grid>
+                    <ContentControl Content="{Binding LiveTiers}" Margin="0,6,0,0">
+                                <ContentControl.ContentTemplate>
+                                    <DataTemplate>
+                                        <views:TierBreakdownView />
+                                    </DataTemplate>
+                                </ContentControl.ContentTemplate>
+                            </ContentControl>
+                    <TextBlock Text="{Binding LiveTierStatus}" Classes="muted" TextWrapping="Wrap" Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+
             <!-- ── Date range + delete ────────────────────────────────── -->
             <Border Classes="card" Margin="0,0,0,16">
                 <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto,Auto">
@@ -156,10 +183,44 @@
                     <lvc:CartesianChart Series="{Binding TpsSeries}" Height="160" />
                 </StackPanel>
             </Border>
-            <Border Classes="card">
+            <Border Classes="card" Margin="0,0,0,12">
                 <StackPanel>
                     <TextBlock Text="CPU Utilization (%)" Classes="label" Margin="0,0,0,8" />
                     <lvc:CartesianChart Series="{Binding CpuSeries}" Height="140" />
+                </StackPanel>
+            </Border>
+
+            <!-- ── Tiered memory analytics ────────────────────────────── -->
+            <Border Classes="card" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="Tier occupancy (MB) — planned VRAM / warm RAM / cold disk, and warm bytes actually resident" Classes="label" Margin="0,0,0,8" />
+                    <lvc:CartesianChart Series="{Binding TierSeries}" LegendPosition="Top" LegendTextPaint="{x:Static vm:ChartTheme.LegendPaint}" Height="170" />
+                </StackPanel>
+            </Border>
+            <Border Classes="card" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="Decode speed vs. estimate (prefill shown ÷ 10)" Classes="label" Margin="0,0,0,8" />
+                    <lvc:CartesianChart Series="{Binding SpeedSplitSeries}" LegendPosition="Top" LegendTextPaint="{x:Static vm:ChartTheme.LegendPaint}" Height="170" />
+                </StackPanel>
+            </Border>
+            <Border Classes="card" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="Modeled time per token (ms) — where generation waits" Classes="label" Margin="0,0,0,8" />
+                    <lvc:CartesianChart Series="{Binding StallSeries}" LegendPosition="Top" LegendTextPaint="{x:Static vm:ChartTheme.LegendPaint}" Height="170" />
+                </StackPanel>
+            </Border>
+            <Border Classes="card" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="I/O — disk reads, PCIe traffic, major page faults" Classes="label" Margin="0,0,0,8" />
+                    <lvc:CartesianChart Series="{Binding IoSeries}" LegendPosition="Top" LegendTextPaint="{x:Static vm:ChartTheme.LegendPaint}" Height="170" />
+                </StackPanel>
+            </Border>
+            <Border Classes="card">
+                <StackPanel>
+                    <TextBlock Text="MoE expert routing (share vs. average expert)" Classes="label" Margin="0,0,0,4" />
+                    <TextBlock Text="{Binding RoutingSummary}" Classes="muted" TextWrapping="Wrap" Margin="0,0,0,8" />
+                    <lvc:CartesianChart Series="{Binding HeatSeries}" XAxes="{Binding HeatXAxis}" YAxes="{Binding HeatYAxis}"
+                                        Height="320" IsVisible="{Binding HasRouting}" />
                 </StackPanel>
             </Border>
         </StackPanel>

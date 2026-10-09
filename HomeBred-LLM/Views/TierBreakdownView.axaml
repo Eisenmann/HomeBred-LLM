@@ -1,0 +1,55 @@
+<UserControl x:Class="HomebredLLM.Views.TierBreakdownView"
+             xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- DataContext: TierBreakdownViewModel -->
+    <StackPanel>
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+            <Border Background="{Binding VerdictColor}" CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
+                <TextBlock Text="{Binding Verdict}" FontSize="11" FontWeight="SemiBold" Foreground="White" />
+            </Border>
+            <TextBlock Text="{Binding SpeedText}" FontSize="18" FontWeight="Bold"
+                       Foreground="{StaticResource SuccessBrush}" Margin="12,0,0,0" VerticalAlignment="Center" />
+        </StackPanel>
+
+        <!-- Stacked tier bar -->
+        <StackPanel Orientation="Horizontal" Height="14" Margin="0,0,0,6" HorizontalAlignment="Left">
+            <Border Background="#8B5CF6" Width="{Binding VramWidth}" CornerRadius="3,0,0,3" />
+            <Border Background="#0EA5E9" Width="{Binding WarmWidth}" />
+            <Border Background="#F59E0B" Width="{Binding ColdWidth}" CornerRadius="0,3,3,0" />
+        </StackPanel>
+        <WrapPanel Margin="0,0,0,6">
+            <StackPanel Orientation="Horizontal" Margin="0,0,14,0">
+                <Border Background="#8B5CF6" Width="10" Height="10" CornerRadius="2" Margin="0,0,5,0" />
+                <TextBlock Text="{Binding VramText}" Classes="muted" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,14,0">
+                <Border Background="#0EA5E9" Width="10" Height="10" CornerRadius="2" Margin="0,0,5,0" />
+                <TextBlock Text="{Binding WarmText}" Classes="muted" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal">
+                <Border Background="#F59E0B" Width="10" Height="10" CornerRadius="2" Margin="0,0,5,0" />
+                <TextBlock Text="{Binding ColdText}" Classes="muted" />
+            </StackPanel>
+        </WrapPanel>
+
+        <TextBlock Text="{Binding DetailText}" Classes="muted" TextWrapping="Wrap" Margin="0,0,0,2" />
+        <TextBlock Text="{Binding BreakdownText}" Classes="muted" TextWrapping="Wrap" Margin="0,0,0,6" />
+
+        <ItemsControl ItemsSource="{Binding Warnings}" IsVisible="{Binding HasWarnings}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding StringFormat='⚠ {0}'}" Foreground="{StaticResource WarningBrush}"
+                               FontSize="11" TextWrapping="Wrap" Margin="0,0,0,2" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <ItemsControl ItemsSource="{Binding Suggestions}" IsVisible="{Binding HasSuggestions}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding StringFormat='💡 {0}'}" Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="11" TextWrapping="Wrap" Margin="0,0,0,2" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </StackPanel>
+</UserControl>

@@ -60,3 +60,7 @@ __pycache__/
 
 # AI-agent scratch files
 task_progress.md
+
+# Locally built llama.cpp (native/llama.cpp-hbec) and its build tree
+HomeBred-LLM/native/
+native/llama.cpp-hbec/.work/

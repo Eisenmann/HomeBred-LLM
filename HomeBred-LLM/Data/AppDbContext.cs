@@ -13,6 +13,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<ChatAttachment> ChatAttachments => Set<ChatAttachment>();
     public DbSet<DownloadJob> DownloadJobs => Set<DownloadJob>();
     public DbSet<LoraAdapterConfig> LoraAdapters => Set<LoraAdapterConfig>();
+    public DbSet<MemoryProfile> MemoryProfiles => Set<MemoryProfile>();
+    public DbSet<HardwareProfile> HardwareProfiles => Set<HardwareProfile>();
+    public DbSet<ExpertUsageSnapshot> ExpertUsageSnapshots => Set<ExpertUsageSnapshot>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -43,6 +46,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
              .HasForeignKey(a => a.ModelId)
              .OnDelete(DeleteBehavior.Cascade);
 
+            e.HasOne(m => m.MemoryProfile)
+             .WithOne(p => p.Model)
+             .HasForeignKey<MemoryProfile>(p => p.ModelId)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            e.HasMany(m => m.ExpertUsageSnapshots)
+             .WithOne(s => s.Model)
+             .HasForeignKey(s => s.ModelId)
+             .OnDelete(DeleteBehavior.Cascade);
+
             e.Property(m => m.Status).HasConversion<string>();
             e.Property(m => m.Format).HasConversion<string>();
         });
@@ -68,6 +81,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         b.Entity<DownloadJob>()
          .Property(j => j.Status).HasConversion<string>();
+
+        b.Entity<MemoryProfile>(e =>
+        {
+            e.Property(p => p.Mode).HasConversion<string>();
+            e.Property(p => p.KvCacheType).HasConversion<string>();
+            e.Property(p => p.RebalancePolicy).HasConversion<string>();
+        });
+
+        b.Entity<ExpertUsageSnapshot>()
+         .HasIndex(s => new { s.ModelId, s.RecordedAt });
 
         // Indexes for analytics time-range queries
         b.Entity<AnalyticsMetric>()
@@ -147,6 +170,98 @@ public static class AppDbContextSchemaReconciler
                     "CreatedAt" TEXT NOT NULL,
                     CONSTRAINT "FK_LoraAdapters_Models_ModelId" FOREIGN KEY ("ModelId") REFERENCES "Models" ("Id") ON DELETE CASCADE
                 )
+                """);
+
+        // ── Tiered memory (docs/tiered-memory-architecture.md) ─────────────
+        var metricColumns = await GetColumnsAsync(db, "AnalyticsMetrics");
+        if (metricColumns.Count > 0)
+        {
+            string[] added =
+            [
+                "PrefillTokensPerSecond", "DecodeTokensPerSecond",
+                "TierVramMb", "TierWarmMb", "TierColdMb", "WarmResidentMb", "WarmHitRate",
+                "EstimatedTokensPerSecond", "EstGpuMsPerToken", "EstCpuMsPerToken",
+                "EstDiskMsPerToken", "EstSyncMsPerToken",
+                "DiskReadMbps", "MajorFaultsPerSec", "PcieRxMbps", "PcieTxMbps",
+                "ExpertCacheHitRate", "ExpertPromotions", "ExpertUploadMb",
+            ];
+            foreach (var col in added.Where(c => !metricColumns.Contains(c)))
+#pragma warning disable EF1002 // column names come from the constant list above
+                await db.Database.ExecuteSqlRawAsync(
+                    $"ALTER TABLE \"AnalyticsMetrics\" ADD COLUMN \"{col}\" REAL NULL");
+#pragma warning restore EF1002
+        }
+
+        var memoryColumns = await GetColumnsAsync(db, "MemoryProfiles");
+        if (memoryColumns.Count > 0 && !memoryColumns.Contains("ExpertCacheEnabled"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE \"MemoryProfiles\" ADD COLUMN \"ExpertCacheEnabled\" INTEGER NOT NULL DEFAULT 1");
+
+        if (memoryColumns.Count == 0)
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TABLE IF NOT EXISTS "MemoryProfiles" (
+                    "Id" TEXT NOT NULL PRIMARY KEY,
+                    "ModelId" TEXT NOT NULL,
+                    "Mode" TEXT NOT NULL,
+                    "VramBudgetMb" INTEGER NOT NULL,
+                    "RamBudgetMb" INTEGER NOT NULL,
+                    "AllowDiskTier" INTEGER NOT NULL,
+                    "LockWarmTier" INTEGER NOT NULL,
+                    "KvCacheType" TEXT NOT NULL,
+                    "KvOnGpu" INTEGER NOT NULL,
+                    "FlashAttention" INTEGER NOT NULL,
+                    "ParallelSequences" INTEGER NOT NULL,
+                    "RoutingProfilerEnabled" INTEGER NOT NULL,
+                    "ExpertCacheEnabled" INTEGER NOT NULL DEFAULT 1,
+                    "ProfilerWindowTokens" INTEGER NOT NULL,
+                    "RebalancePolicy" TEXT NOT NULL,
+                    "RebalanceThreshold" REAL NOT NULL,
+                    "UpdatedAt" TEXT NOT NULL,
+                    CONSTRAINT "FK_MemoryProfiles_Models_ModelId" FOREIGN KEY ("ModelId") REFERENCES "Models" ("Id") ON DELETE CASCADE
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_MemoryProfiles_ModelId" ON "MemoryProfiles" ("ModelId");
+                """);
+
+        if ((await GetColumnsAsync(db, "HardwareProfiles")).Count == 0)
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TABLE IF NOT EXISTS "HardwareProfiles" (
+                    "Id" TEXT NOT NULL PRIMARY KEY,
+                    "HasGpuBackend" INTEGER NOT NULL,
+                    "GpuName" TEXT NULL,
+                    "BackendDevices" TEXT NULL,
+                    "VramTotalBytes" INTEGER NOT NULL,
+                    "VramBandwidthGBs" REAL NOT NULL,
+                    "PcieBandwidthGBs" REAL NOT NULL,
+                    "RamTotalBytes" INTEGER NOT NULL,
+                    "RamBandwidthGBs" REAL NOT NULL,
+                    "CpuCores" INTEGER NOT NULL,
+                    "DiskPath" TEXT NULL,
+                    "DiskSequentialMBs" REAL NOT NULL,
+                    "DiskRandomMBs" REAL NOT NULL,
+                    "DiskLatencyMs" REAL NOT NULL,
+                    "SpeedCalibration" REAL NOT NULL,
+                    "ComputeBufferCalibration" REAL NOT NULL,
+                    "MeasuredAt" TEXT NOT NULL
+                )
+                """);
+
+        if ((await GetColumnsAsync(db, "ExpertUsageSnapshots")).Count == 0)
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE TABLE IF NOT EXISTS "ExpertUsageSnapshots" (
+                    "Id" TEXT NOT NULL PRIMARY KEY,
+                    "ModelId" TEXT NOT NULL,
+                    "RecordedAt" TEXT NOT NULL,
+                    "Layers" INTEGER NOT NULL,
+                    "Experts" INTEGER NOT NULL,
+                    "ObservedTokens" REAL NOT NULL,
+                    "Concentration" REAL NOT NULL,
+                    "Data" BLOB NOT NULL,
+                    CONSTRAINT "FK_ExpertUsageSnapshots_Models_ModelId" FOREIGN KEY ("ModelId") REFERENCES "Models" ("Id") ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS "IX_ExpertUsageSnapshots_ModelId_RecordedAt" ON "ExpertUsageSnapshots" ("ModelId", "RecordedAt");
                 """);
     }
 

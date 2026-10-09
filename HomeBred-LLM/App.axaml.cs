@@ -4,6 +4,7 @@ using Avalonia.Markup.Xaml;
 using HomebredLLM.Data;
 using HomebredLLM.Services;
 using HomebredLLM.Services.Gguf;
+using HomebredLLM.Services.Tiering;
 using HomebredLLM.ViewModels;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,11 +42,19 @@ public partial class App : Application
                 // must stay rooted (the buffer holds a strong reference).
                 services.AddSingleton<NativeLogBuffer>();
 
-                services.AddSingleton<LlamaCppInferenceService>();
+                // Tiered memory (VRAM / RAM / disk) — docs/tiered-memory-architecture.md
+                services.AddSingleton<GpuMetricsService>();
+                services.AddSingleton<HardwareProbe>();
+                services.AddSingleton<TieringCoordinator>();
+                services.AddSingleton<ProcessIoSampler>();
+
+                services.AddSingleton<LlamaCppInferenceService>(sp => new LlamaCppInferenceService(
+                    sp.GetRequiredService<NativeLogBuffer>(),
+                    sp.GetRequiredService<TieringCoordinator>(),
+                    sp.GetRequiredService<HardwareProbe>()));
                 services.AddSingleton<IInferenceService, InferenceServiceRouter>();
 
                 services.AddSingleton<HuggingFaceService>();
-                services.AddSingleton<GpuMetricsService>();
                 services.AddSingleton<AnalyticsRepository>();
                 services.AddSingleton<MetricsCollectorService>();
                 services.AddSingleton<ModelApiServerService>();
@@ -59,6 +68,7 @@ public partial class App : Application
                 services.AddSingleton<ModelConfigViewModel>();
                 services.AddSingleton<ChatViewModel>();
                 services.AddSingleton<AnalyticsViewModel>();
+                services.AddSingleton<CalculatorViewModel>();
                 services.AddSingleton<MainViewModel>();
                 services.AddSingleton<MainWindow>();
             })
@@ -96,6 +106,7 @@ public partial class App : Application
             desktop.Exit += (_, _) =>
             {
                 AppHost.Services.GetRequiredService<MetricsCollectorService>().Stop();
+                AppHost.Services.GetRequiredService<TieringCoordinator>().Dispose();
                 AppHost.Services.GetRequiredService<ModelApiServerService>().StopAll();
                 AppHost.Services.GetRequiredService<IInferenceService>().UnloadAll();
                 AppHost.StopAsync().GetAwaiter().GetResult();

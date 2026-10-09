@@ -57,8 +57,15 @@
                             Classes="ghost"
                             HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Left"
+                            Margin="0,0,0,4"
                             Command="{Binding NavigateToCommand}"
                             CommandParameter="Config" />
+                    <Button Content="🧮  Calculator"
+                            Classes="ghost"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Command="{Binding NavigateToCommand}"
+                            CommandParameter="Calculator" />
                 </StackPanel>
 
                 <!-- Status bar -->
@@ -87,6 +94,9 @@
                 </DataTemplate>
                 <DataTemplate DataType="{x:Type vm:ModelConfigViewModel}">
                     <views:ModelConfigView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:CalculatorViewModel}">
+                    <views:CalculatorView />
                 </DataTemplate>
             </ContentControl.DataTemplates>
         </ContentControl>
