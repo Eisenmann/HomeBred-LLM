@@ -37,6 +37,8 @@ public sealed record TierBudget
 public sealed record HardwareSpec
 {
     public bool HasGpuBackend { get; init; }
+    /// <summary>A GPU backend is loaded but the user chose CPU mode.</summary>
+    public bool GpuDisabledByUser { get; init; }
     public string? GpuName { get; init; }
     public long VramTotalBytes { get; init; }
     public long VramFreeBytes { get; init; }

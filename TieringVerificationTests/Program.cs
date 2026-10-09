@@ -209,12 +209,12 @@ Check(CapacityCalculator.ParamsFromName("Llama-3.1-70B-Instruct") == 70, "params
 // ── 7. Profile serialisation ────────────────────────────────────────────────
 Console.WriteLine("\n--- 7. expert usage profile ---");
 var blob = skew.Serialize();
-var back = ExpertUsageProfile.Deserialize(blob)!;
+var back = ExpertUsageProfile.Deserialize(blob);
 Check(back is not null && back.Layers == skew.Layers && Math.Abs(back.Share(5, 3) - skew.Share(5, 3)) < 1e-6, "roundtrip");
 Check(Near(skew.Concentration(16.0 / 128), 0.8 + 0.2 * 16 / 128 * 0, 0.05) || skew.Concentration(16.0 / 128) > 0.75, $"concentration ≈ 0.8 (got {skew.Concentration(16.0 / 128):F2})");
 Check(Math.Abs(skew.ObservedTokens - 2000) < 1, $"observed tokens (got {skew.ObservedTokens})");
 skew.Decay(0.5f);
-Check(Math.Abs(skew.ObservedTokens - 1000) < 1 && Math.Abs(back.Share(5, 3) - skew.Share(5, 3)) < 1e-6, "decay scales counts, keeps shares");
+Check(Math.Abs(skew.ObservedTokens - 1000) < 1 && back is not null && Math.Abs(back.Share(5, 3) - skew.Share(5, 3)) < 1e-6, "decay scales counts, keeps shares");
 Check(ExpertUsageProfile.Deserialize([1, 2, 3]) is null, "garbage blob → null");
 Check(PlacementPlanner.Merge([new(0, 10), new(10, 5), new(30, 5), new(32, 10)]) is [{ Offset: 0, Length: 15 }, { Offset: 30, Length: 12 }], "range merge");
 
@@ -489,6 +489,57 @@ else
         SqliteConnection.ClearAllPools();
         File.Delete(cdb);
     }
+}
+
+// --- GPU backend installer: archive extraction + checker ---
+{
+    Console.WriteLine("\n== GPU backend installer ==");
+    var gtmp = Path.Combine(Path.GetTempPath(), "hb-gpu-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(gtmp);
+    try
+    {
+        // zip (Windows layout): dlls + an exe + a nested dll, plus a path-traversal attempt
+        var zipPath = Path.Combine(gtmp, "t.zip");
+        using (var zs = new FileStream(zipPath, FileMode.Create))
+        using (var z = new System.IO.Compression.ZipArchive(zs, System.IO.Compression.ZipArchiveMode.Create))
+        {
+            void Add(string n, string c) { var e = z.CreateEntry(n); using var w = new StreamWriter(e.Open()); w.Write(c); }
+            Add("llama.dll", "L"); Add("ggml-cuda.dll", "C"); Add("llama-server.exe", "X"); Add("sub/ggml-base.dll", "B");
+            Add("../evil.dll", "E");
+        }
+        var outDir = Path.Combine(gtmp, "native");
+        Directory.CreateDirectory(outDir);
+        GpuBackendInstaller.Extract(zipPath, outDir);
+        Check(File.Exists(Path.Combine(outDir, "llama.dll")) && File.Exists(Path.Combine(outDir, "ggml-cuda.dll")), "zip: dlls extracted");
+        Check(File.Exists(Path.Combine(outDir, "ggml-base.dll")), "zip: nested dll flattened");
+        Check(!File.Exists(Path.Combine(outDir, "llama-server.exe")), "zip: executables skipped");
+        Check(!File.Exists(Path.Combine(gtmp, "evil.dll")), "zip: traversal entry stays inside the folder");
+
+        // tar.gz (Linux layout): real file + symlink + tool binary
+        var tarPath = Path.Combine(gtmp, "t.tar.gz");
+        using (var fs = File.Create(tarPath))
+        using (var gz = new System.IO.Compression.GZipStream(fs, System.IO.Compression.CompressionLevel.Fastest))
+        using (var tw = new System.Formats.Tar.TarWriter(gz))
+        {
+            var real = new System.Formats.Tar.PaxTarEntry(System.Formats.Tar.TarEntryType.RegularFile, "llama-b8816/libllama.so.0.0.1")
+            { DataStream = new MemoryStream("SO"u8.ToArray()) };
+            tw.WriteEntry(real);
+            tw.WriteEntry(new System.Formats.Tar.PaxTarEntry(System.Formats.Tar.TarEntryType.SymbolicLink, "llama-b8816/libllama.so") { LinkName = "libllama.so.0.0.1" });
+            tw.WriteEntry(new System.Formats.Tar.PaxTarEntry(System.Formats.Tar.TarEntryType.RegularFile, "llama-b8816/llama-cli") { DataStream = new MemoryStream("T"u8.ToArray()) });
+        }
+        var outLinux = Path.Combine(gtmp, "linux");
+        Directory.CreateDirectory(outLinux);
+        GpuBackendInstaller.Extract(tarPath, outLinux);
+        Check(File.Exists(Path.Combine(outLinux, "libllama.so.0.0.1")), "tar.gz: library extracted");
+        Check(File.Exists(Path.Combine(outLinux, "libllama.so")) && File.ReadAllText(Path.Combine(outLinux, "libllama.so")) == "SO", "tar.gz: symlink materialised as copy");
+        Check(!File.Exists(Path.Combine(outLinux, "llama-cli")), "tar.gz: tool binaries skipped");
+
+        Check(GpuBackendInstaller.CanInstall(GpuBackendKind.Cuda) == OperatingSystem.IsWindows(), "CUDA installable only on Windows");
+        var gpuReport = new GpuRequirementsChecker(new HomebredLLM.Services.GpuMetricsService()).Check();
+        Check(gpuReport.Items.Count > 0 && !string.IsNullOrEmpty(gpuReport.Summary), "checker returns a gpuReport");
+        Console.WriteLine("  checker: " + gpuReport.Summary);
+    }
+    finally { try { Directory.Delete(gtmp, true); } catch { } }
 }
 
 Console.WriteLine($"\n{(failures == 0 ? "ALL PASSED" : $"{failures} FAILURE(S)")}");

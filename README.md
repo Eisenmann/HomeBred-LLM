@@ -52,7 +52,7 @@ No background services. No terminal. No config files.
 | Concern | Technology |
 |---------|-----------|
 | LLM inference | [LLamaSharp](https://github.com/SciSharp/LLamaSharp) — P/Invoke bindings to llama.cpp, runs **in-process** |
-| GPU kernels | `LLamaSharp.Backend.Cuda12` (CUDA 12) · `LLamaSharp.Backend.Cpu` (fallback) — bundled NuGet natives |
+| GPU kernels | `LLamaSharp.Backend.Cpu` bundled · CUDA 12 / Vulkan optional via a llama.cpp build in `native/` — see [GPU setup](docs/gpu-setup.md) |
 | Model downloads | `HttpClient` → `huggingface.co/api` — no Python or HF CLI needed |
 | GPU monitoring | Dynamic `NativeLibrary` load of `nvml.dll` (Windows) / `libnvidia-ml.so` (Linux) |
 | CPU monitoring | `PerformanceCounter` on Windows · `/proc/stat` delta on Linux · GC memory API everywhere |
@@ -69,12 +69,12 @@ No background services. No terminal. No config files.
 | | Windows | Linux | macOS |
 |--|---------|-------|-------|
 | .NET 10.0 | ✅ | ✅ | ✅ |
-| NVIDIA GPU (CUDA 12) | optional | optional | — |
+| GPU backend (CUDA 12 / Vulkan) | optional, [manual setup](docs/gpu-setup.md) | optional, [manual setup](docs/gpu-setup.md) | — |
 | CPU-only fallback | ✅ | ✅ | ✅ (Apple Silicon via Metal planned) |
 
 - **.NET 10.0** — install the [runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) or publish self-contained
 - **Disk space** — models range from ~2 GB (Q4 7B) to ~40 GB (Q4 70B)
-- **VRAM** — 4 GB minimum for small models; 8–16 GB for 13B+ at full GPU offload
+- **VRAM** — 4 GB minimum for small models; 8–16 GB for 13B+ at full GPU offload. Requires installing a GPU backend first: see [docs/gpu-setup.md](docs/gpu-setup.md)
 
 ---
 
@@ -103,7 +103,7 @@ dotnet publish HomeBred-LLM -c Release -r linux-x64 --self-contained -o ./publis
 dotnet publish HomeBred-LLM -c Release -r osx-x64  --self-contained -o ./publish/mac
 ```
 
-> **GPU vs CPU build:** Both backends are included by default. LLamaSharp selects CUDA automatically if drivers are present and falls back to CPU otherwise. To ship a CPU-only build, remove the `LLamaSharp.Backend.Cuda12` reference from the `.csproj`.
+> **GPU vs CPU build:** Releases include only the CPU backend (small download). To use a GPU, copy a matching llama.cpp CUDA/Vulkan build (tag b8816) into `native/` next to the executable — step-by-step in [docs/gpu-setup.md](docs/gpu-setup.md). No rebuild is needed.
 
 ---
 

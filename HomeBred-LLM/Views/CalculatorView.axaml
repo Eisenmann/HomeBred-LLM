@@ -25,6 +25,51 @@
                 </Grid>
             </Border>
 
+            <!-- Compute mode: CPU / GPU switch + GPU requirements check -->
+            <Border Classes="card" Margin="0,0,0,12">
+                <StackPanel>
+                    <Grid ColumnDefinitions="Auto,140,*,Auto">
+                        <TextBlock Text="Compute" Classes="label" VerticalAlignment="Center" Margin="0,0,12,0" />
+                        <ComboBox Grid.Column="1" ItemsSource="{Binding ComputeOptions}" SelectedIndex="{Binding ComputeModeIndex}"
+                                  HorizontalAlignment="Stretch"
+                                  ToolTip.Tip="CPU: run on CPU + RAM (+ disk). GPU: use VRAM too — the app checks the driver and llama.cpp GPU build and tells you what to install." />
+                        <TextBlock Grid.Column="2" Text="{Binding GpuSummary}" Classes="muted" TextWrapping="Wrap"
+                                   VerticalAlignment="Center" Margin="12,0" />
+                        <Button Grid.Column="3" Content="↻ Re-check" Classes="ghost" Command="{Binding RecheckGpuCommand}"
+                                IsVisible="{Binding ShowGpuChecklist}" />
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding GpuChecklist}" IsVisible="{Binding ShowGpuChecklist}" Margin="0,10,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ColumnDefinitions="24,*,Auto" Margin="0,0,0,8">
+                                    <TextBlock Text="{Binding Icon}" Foreground="{Binding IconBrush}" FontSize="14" VerticalAlignment="Top" />
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12" />
+                                        <TextBlock Text="{Binding Detail}" Classes="muted" TextWrapping="Wrap" FontSize="12" />
+                                        <TextBlock Text="{Binding Advice}" IsVisible="{Binding HasAdvice}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <Button Grid.Column="2" Content="Open page" Classes="ghost" VerticalAlignment="Top" IsVisible="{Binding HasUrl}"
+                                            Command="{Binding DataContext.OpenUrlCommand, RelativeSource={RelativeSource FindAncestor, AncestorType={x:Type UserControl}}}"
+                                            CommandParameter="{Binding Url}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <StackPanel IsVisible="{Binding ShowGpuChecklist}" Margin="0,4,0,0">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="⬇ Set up GPU backend automatically" Classes="accent"
+                                    Command="{Binding InstallGpuCommand}" IsVisible="{Binding CanInstallGpu}"
+                                    IsEnabled="{Binding !IsInstallingGpu}"
+                                    ToolTip.Tip="Downloads the official llama.cpp GPU build that matches this app from GitHub (a few hundred MB) and installs it for this user." />
+                            <Button Content="⟳ Restart app" Classes="accent" Command="{Binding RestartAppCommand}"
+                                    IsVisible="{Binding RestartRequired}" />
+                        </StackPanel>
+                        <ProgressBar Value="{Binding InstallProgress}" Maximum="100" Margin="0,8,0,0" IsVisible="{Binding IsInstallingGpu}" />
+                        <TextBlock Text="{Binding InstallStatus}" Classes="muted" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
             <Grid ColumnDefinitions="320,*">
                 <!-- Inputs -->
                 <Border Grid.Column="0" Classes="card" Margin="0,0,12,0" VerticalAlignment="Top">
@@ -32,8 +77,8 @@
                         <TextBlock Text="VRAM budget (GB)" Classes="label" />
                         <Grid ColumnDefinitions="*,64" Margin="0,0,0,10">
                             <Slider Minimum="0" Maximum="{Binding VramTotalGb}" Value="{Binding VramBudgetGb}" TickFrequency="0.5"
-                                    IsSnapToTickEnabled="True" Margin="0,0,8,0" />
-                            <TextBox Grid.Column="1" Text="{Binding VramBudgetGb}" />
+                                    IsSnapToTickEnabled="True" Margin="0,0,8,0" IsEnabled="{Binding HasGpuBackend}" />
+                            <TextBox Grid.Column="1" Text="{Binding VramBudgetGb}" IsEnabled="{Binding HasGpuBackend}" />
                         </Grid>
                         <TextBlock Text="RAM budget (GB)" Classes="label" />
                         <Grid ColumnDefinitions="*,64" Margin="0,0,0,10">

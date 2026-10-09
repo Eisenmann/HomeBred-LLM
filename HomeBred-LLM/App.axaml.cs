@@ -45,6 +45,8 @@ public partial class App : Application
                 // Tiered memory (VRAM / RAM / disk) — docs/tiered-memory-architecture.md
                 services.AddSingleton<GpuMetricsService>();
                 services.AddSingleton<HardwareProbe>();
+                services.AddSingleton<GpuRequirementsChecker>();
+                services.AddSingleton<GpuBackendInstaller>();
                 services.AddSingleton<TieringCoordinator>();
                 services.AddSingleton<ProcessIoSampler>();
 
@@ -123,9 +125,12 @@ public partial class App : Application
 
 public static class AppPaths
 {
-    private static readonly string _base = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "HomeBred-LLM");
+    // HOMEBRED_DATA_DIR relocates all app data (database, models, native libs) — used by automated
+    // UI/e2e runs so they never touch the user's real data.
+    private static readonly string _base =
+        Environment.GetEnvironmentVariable("HOMEBRED_DATA_DIR") is { Length: > 0 } custom
+            ? custom
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HomeBred-LLM");
 
     public static string Base => Directory.CreateDirectory(_base).FullName;
     public static string DatabaseFile => Path.Combine(Base, "homebred.db");

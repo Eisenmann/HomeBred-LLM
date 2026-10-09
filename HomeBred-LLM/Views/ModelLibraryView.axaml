@@ -108,7 +108,7 @@
                                             <TextBlock Classes="muted" Margin="0,3,0,0">
                                                 <Run Text="{Binding HfRepoId, FallbackValue='local file'}" />
                                                 <Run Text=" · " />
-                                                <Run Text="{Binding FileSizeBytes, Converter={StaticResource Bytes}}" />
+                                                <Run Text="{Binding FileSizeBytes, Converter={StaticResource Bytes}, Mode=OneWay}" />
                                             </TextBlock>
                                         </StackPanel>
 

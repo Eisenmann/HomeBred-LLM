@@ -28,6 +28,7 @@ public partial class ModelConfigViewModel(
 
     [ObservableProperty] private bool _isGguf;
     [ObservableProperty] private bool _tieredMode = true;
+    [ObservableProperty] private bool _hasGpuBackend = true;
     [ObservableProperty] private bool _autoVram = true;
     [ObservableProperty] private bool _autoRam = true;
     [ObservableProperty] private double _vramBudgetGb;
@@ -79,7 +80,8 @@ public partial class ModelConfigViewModel(
     private void WriteMemoryFields(MemoryProfile m)
     {
         m.Mode = TieredMode ? TieringMode.Tiered : TieringMode.Simple;
-        m.VramBudgetMb = AutoVram ? -1 : (int)Math.Max(0, VramBudgetGb * 1024);
+        if (HasGpuBackend) // without a GPU backend the VRAM row is disabled and shows 0 — keep the stored value
+            m.VramBudgetMb = AutoVram ? -1 : (int)Math.Max(0, VramBudgetGb * 1024);
         m.RamBudgetMb = AutoRam ? -1 : (int)Math.Max(0, RamBudgetGb * 1024);
         m.AllowDiskTier = AllowDiskTier;
         m.LockWarmTier = LockWarmTier;
@@ -103,7 +105,13 @@ public partial class ModelConfigViewModel(
         ExpertCacheNote = tiering.ExpertCache.Description;
         HardwareNote = hw.HasGpuBackend
             ? $"{hw.GpuName ?? "GPU"}: {VramTotalGb:F1} GB VRAM ({hw.VramFreeBytes / (double)(1L << 30):F1} GB free) · RAM {RamTotalGb:F0} GB ({hw.RamAvailableBytes / (double)(1L << 30):F1} GB available)"
-            : $"No GPU device in the llama.cpp backend — CPU only. RAM {RamTotalGb:F0} GB ({hw.RamAvailableBytes / (double)(1L << 30):F1} GB available)";
+            : (hw.GpuDisabledByUser
+                ? $"{hw.GpuName ?? "GPU"} ({VramTotalGb:F1} GB VRAM): GPU mode is off (Calculator → Compute) — "
+                : hw.VramTotalBytes > 0
+                ? $"{hw.GpuName ?? "GPU"} ({VramTotalGb:F1} GB VRAM) detected, but the llama.cpp backend is CPU-only, so VRAM is not used (Calculator → Compute → GPU shows what to install) — "
+                : "No GPU device in the llama.cpp backend — ") +
+              $"CPU only. RAM {RamTotalGb:F0} GB ({hw.RamAvailableBytes / (double)(1L << 30):F1} GB available)";
+        HasGpuBackend = hw.HasGpuBackend;
 
         _loadingMemory = true;
         try
@@ -111,7 +119,9 @@ public partial class ModelConfigViewModel(
             TieredMode = _memory.Mode == TieringMode.Tiered;
             AutoVram = _memory.VramBudgetMb < 0;
             AutoRam = _memory.RamBudgetMb < 0;
-            VramBudgetGb = AutoVram ? Math.Max(0, Math.Round(VramTotalGb - 1, 1)) : Math.Round(_memory.VramBudgetMb / 1024.0, 1);
+            VramBudgetGb = !hw.HasGpuBackend ? 0
+                : AutoVram ? Math.Max(0, Math.Round(VramTotalGb - 1, 1))
+                : Math.Round(_memory.VramBudgetMb / 1024.0, 1);
             RamBudgetGb = AutoRam ? Math.Max(1, Math.Round(Math.Min(RamTotalGb - 4, RamTotalGb * 0.8))) : Math.Round(_memory.RamBudgetMb / 1024.0, 1);
             AllowDiskTier = _memory.AllowDiskTier;
             LockWarmTier = _memory.LockWarmTier;

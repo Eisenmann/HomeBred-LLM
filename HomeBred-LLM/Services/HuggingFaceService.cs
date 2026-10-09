@@ -105,7 +105,7 @@ public sealed class HuggingFaceService
 
         var total = resp.Content.Headers.ContentLength ?? -1;
         using var src = await resp.Content.ReadAsStreamAsync(ct);
-        Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(destPath))!);
         using var dst = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
 
         var buf = new byte[81920];
@@ -119,6 +119,73 @@ public sealed class HuggingFaceService
             progress?.Report((downloaded, total, pct));
         }
     }
+
+    /// <summary>
+    /// Downloads one ONNX variant. <paramref name="variantDir"/> is the directory entry returned by
+    /// <see cref="ListOnnxFilesAsync"/> ("onnx", "cpu_and_mobile/cpu-int4", or "." for the repo root).
+    /// Files of that directory land flat in <paramref name="destDir"/>; the small root-level config /
+    /// tokenizer files the runtime needs next to the model are downloaded too.
+    /// </summary>
+    public async Task DownloadDirectoryAsync(
+        string repoId,
+        string variantDir,
+        string destDir,
+        IProgress<(long downloaded, long total, double pct)>? progress = null,
+        CancellationToken ct = default)
+    {
+        var detail = await _http.GetFromJsonAsync<HfModelDetail>(
+            $"https://huggingface.co/api/models/{repoId}?blobs=true", ct);
+        var siblings = detail?.Siblings ?? [];
+
+        var prefix = variantDir is "." or "" ? "" : variantDir.TrimEnd('/') + "/";
+        string[] sideExt = [".json", ".txt", ".model", ".jinja", ".tiktoken"];
+
+        var files = new List<(string Remote, string Local, long Size)>();
+        foreach (var s in siblings)
+        {
+            var name = s.Rfilename;
+            if (prefix.Length > 0 && name.StartsWith(prefix, StringComparison.Ordinal))
+                files.Add((name, name[prefix.Length..], s.Size ?? 0));
+            else if (prefix.Length == 0 && !name.Contains('/') && IsRootFileForOnnx(name))
+                files.Add((name, name, s.Size ?? 0));
+            else if (prefix.Length > 0 && !name.Contains('/') &&
+                     sideExt.Contains(Path.GetExtension(name), StringComparer.OrdinalIgnoreCase))
+                files.Add((name, name, s.Size ?? 0)); // config.json, tokenizer.json ... next to the model
+        }
+        if (files.Count == 0)
+            throw new InvalidOperationException($"No files found in '{variantDir}' of {repoId}.");
+
+        var root = Path.GetFullPath(destDir);
+        Directory.CreateDirectory(root);
+        long grand = files.Sum(f => f.Size);
+        long done = 0;
+        foreach (var (remote, local, size) in files)
+        {
+            var target = Path.GetFullPath(Path.Combine(root, local));
+            if (!target.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                continue; // never write outside the model folder
+            var baseDone = done;
+            var inner = new Progress<(long downloaded, long total, double pct)>(p =>
+            {
+                var d = baseDone + p.downloaded;
+                var t = grand > 0 ? grand : Math.Max(d, p.total);
+                progress?.Report((d, t, t > 0 ? d * 100.0 / t : 0));
+            });
+            await DownloadFileAsync(repoId, remote, target, inner, ct);
+            done += size > 0 ? size : new FileInfo(target).Length;
+        }
+    }
+
+    // Root-level files of an ONNX-in-root repo: skip weights in other formats.
+    private static bool IsRootFileForOnnx(string name) =>
+        !name.EndsWith(".safetensors", StringComparison.OrdinalIgnoreCase) &&
+        !name.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) &&
+        !name.EndsWith(".h5", StringComparison.OrdinalIgnoreCase) &&
+        !name.EndsWith(".msgpack", StringComparison.OrdinalIgnoreCase) &&
+        !name.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) &&
+        !name.EndsWith(".pt", StringComparison.OrdinalIgnoreCase) &&
+        !name.EndsWith(".md", StringComparison.OrdinalIgnoreCase) &&
+        !name.StartsWith(".", StringComparison.Ordinal);
 
     private static string? ParseQuantization(string filename)
     {

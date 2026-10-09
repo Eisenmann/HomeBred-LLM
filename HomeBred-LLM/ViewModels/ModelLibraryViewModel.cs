@@ -249,7 +249,7 @@ public partial class ModelLibraryViewModel(
             // For ONNX models, file.Filename is a directory path (e.g. "onnx/")
             // We need to download all files in that directory.
             Directory.CreateDirectory(destDir);
-            await hf.DownloadFileAsync(SelectedHfModel.RepoId, file.Filename, destDir, progress);
+            await hf.DownloadDirectoryAsync(SelectedHfModel.RepoId, file.Filename, destDir, progress);
 
             string? mmprojPath = null;
             var mmproj = await hf.FindMmprojFileAsync(SelectedHfModel.RepoId);
@@ -265,7 +265,7 @@ public partial class ModelLibraryViewModel(
             if (m != null)
             {
                 m.LocalPath = destDir;
-                m.FileSizeBytes = new DirectoryInfo(destDir).EnumerateFiles().Sum(f => f.Length);
+                m.FileSizeBytes = new DirectoryInfo(destDir).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
                 m.MmprojPath = mmprojPath;
                 m.Status = ModelStatus.Ready;
                 m.UpdatedAt = DateTime.UtcNow;
@@ -284,6 +284,17 @@ public partial class ModelLibraryViewModel(
         catch (Exception ex)
         {
             model.Status = ModelStatus.Error;
+            try
+            {
+                // Persist the failure — otherwise the entry stays "Downloading" in the DB after a restart.
+                await using var dbErr = await dbFactory.CreateDbContextAsync();
+                var mErr = await dbErr.Models.FindAsync(model.Id);
+                if (mErr != null) { mErr.Status = ModelStatus.Error; mErr.UpdatedAt = DateTime.UtcNow; }
+                var jErr = await dbErr.DownloadJobs.FirstOrDefaultAsync(x => x.ModelId == model.Id);
+                if (jErr != null) jErr.Status = Models.DownloadStatus.Failed;
+                await dbErr.SaveChangesAsync();
+            }
+            catch { /* best effort */ }
             DownloadStatus = $"Error: {ex.Message}";
             DownloadErrorDetails = ex.ToString();
             HasDownloadError = true;

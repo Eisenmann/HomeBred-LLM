@@ -47,6 +47,26 @@ public sealed class HardwareProbe(GpuMetricsService gpu, IDbContextFactory<AppDb
         finally { _gate.Release(); }
     }
 
+    /// <summary>True when the user chose CPU mode (a loaded GPU backend must then not be used).</summary>
+    public async Task<bool> IsGpuDisabledAsync(CancellationToken ct = default) =>
+        (await GetProfileAsync(ct)).ComputeMode == ComputeMode.Cpu;
+
+    public async Task SetComputeModeAsync(ComputeMode mode, CancellationToken ct = default)
+    {
+        var p = await GetProfileAsync(ct);
+        await _gate.WaitAsync(ct);
+        try
+        {
+            p.ComputeMode = mode;
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            var row = await db.HardwareProfiles.FirstOrDefaultAsync(ct);
+            if (row is null) return;
+            row.ComputeMode = mode;
+            await db.SaveChangesAsync(ct);
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Full benchmark (RAM bandwidth + disk read speed of <paramref name="diskPath"/>), persisted.</summary>
     public async Task<HardwareProfile> RunBenchmarkAsync(string? diskPath, IProgress<string>? progress = null,
         CancellationToken ct = default)
@@ -59,6 +79,7 @@ public sealed class HardwareProbe(GpuMetricsService gpu, IDbContextFactory<AppDb
             var existing = await db.HardwareProfiles.FirstOrDefaultAsync(ct);
             if (existing is not null)
             {
+                fresh.ComputeMode = existing.ComputeMode;
                 fresh.SpeedCalibration = existing.SpeedCalibration;
                 fresh.ComputeBufferCalibration = existing.ComputeBufferCalibration;
                 db.HardwareProfiles.Remove(existing);

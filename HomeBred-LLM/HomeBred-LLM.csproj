@@ -26,13 +26,10 @@
                       Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
 
     <!-- GGUF inference (v2/v3) — LLamaSharp is the managed binding to llama.cpp.
-         It needs exactly one native backend package alongside it, matching the
-         machine this ships on. Swap the line below for the right one:
-           LLamaSharp.Backend.Cpu     - no GPU, any OS (safest default)
-           LLamaSharp.Backend.Cuda12  - NVIDIA GPUs, Windows/Linux
-           LLamaSharp.Backend.Vulkan  - AMD/Intel/NVIDIA GPUs via Vulkan
-           LLamaSharp.Backend.Metal   - Apple Silicon
-         Only one backend package should be referenced at a time.
+         Only the CPU backend is bundled, to keep the download small. GPU
+         acceleration (CUDA / Vulkan) is opt-in: users drop a matching llama.cpp
+         build into <app>/native (see NativeLibraries.cs and docs/gpu-setup.md),
+         so the release stays small and the GPU stack stays the user's choice.
          Bumped 0.21.0 -> 0.27.0 to get qwen3 architecture support in the
          bundled llama.cpp native build (0.21.0 rejects qwen3 models with
          "unknown model architecture: 'qwen3'"). -->

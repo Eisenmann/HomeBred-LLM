@@ -165,7 +165,7 @@
                               IsChecked="{Binding TieredMode}" Margin="0,0,0,10" />
 
                     <StackPanel IsVisible="{Binding TieredMode}">
-                        <Grid ColumnDefinitions="Auto,*,64" Margin="0,0,0,8">
+                        <Grid ColumnDefinitions="Auto,*,64" Margin="0,0,0,8" IsEnabled="{Binding HasGpuBackend}">
                             <CheckBox Grid.Column="0" Content="Auto VRAM" IsChecked="{Binding AutoVram}" Width="110" />
                             <Slider Grid.Column="1" Minimum="0" Maximum="{Binding VramTotalGb}" Value="{Binding VramBudgetGb}"
                                     TickFrequency="0.5" IsSnapToTickEnabled="True" IsEnabled="{Binding !AutoVram}" Margin="0,0,8,0" />

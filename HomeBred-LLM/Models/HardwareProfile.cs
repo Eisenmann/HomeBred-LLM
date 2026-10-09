@@ -11,6 +11,9 @@ public class HardwareProfile
     [Key] public Guid Id { get; set; } = SingletonId;
 
     public bool HasGpuBackend { get; set; }
+
+    /// <summary>User's CPU / GPU switch (Calculator page). Auto = GPU when a GPU backend is loaded.</summary>
+    public ComputeMode ComputeMode { get; set; } = ComputeMode.Auto;
     public string? GpuName { get; set; }
     public string? BackendDevices { get; set; }
     public long VramTotalBytes { get; set; }
@@ -36,7 +39,8 @@ public class HardwareProfile
 
     public HardwareSpec ToSpec(long vramFree, long ramAvailable) => new()
     {
-        HasGpuBackend = HasGpuBackend,
+        HasGpuBackend = HasGpuBackend && ComputeMode != ComputeMode.Cpu,
+        GpuDisabledByUser = HasGpuBackend && ComputeMode == ComputeMode.Cpu,
         GpuName = GpuName,
         VramTotalBytes = VramTotalBytes,
         VramFreeBytes = vramFree,
