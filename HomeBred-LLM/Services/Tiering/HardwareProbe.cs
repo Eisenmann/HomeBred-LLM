@@ -77,7 +77,10 @@ public sealed class HardwareProbe(GpuMetricsService gpu, IDbContextFactory<AppDb
         var p = await GetProfileAsync(ct);
         var info = gpu.GetStaticInfo();
         var (_, ramAvail) = ReadSystemMemory();
-        return p.ToSpec(info?.VramFreeBytes ?? p.VramTotalBytes, ramAvail);
+        return p.ToSpec(info?.VramFreeBytes ?? p.VramTotalBytes, ramAvail) with
+        {
+            HasExpertCache = p.HasGpuBackend && HbecNative.IsAvailable,
+        };
     }
 
     /// <summary>Blends a measured/estimated decode-speed ratio into the stored calibration (EMA).</summary>

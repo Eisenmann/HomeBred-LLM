@@ -55,4 +55,11 @@ public class AnalyticsMetric
     public float? MajorFaultsPerSec { get; set; }
     public float? PcieRxMbps { get; set; }
     public float? PcieTxMbps { get; set; }
+
+    // Phase 2 expert cache (per-expert VRAM slots)
+    /// <summary>Expected share of routed picks served from VRAM slots.</summary>
+    public float? ExpertCacheHitRate { get; set; }
+    /// <summary>Experts uploaded into VRAM slots during the sample interval.</summary>
+    public float? ExpertPromotions { get; set; }
+    public float? ExpertUploadMb { get; set; }
 }

@@ -183,6 +183,7 @@ public static class AppDbContextSchemaReconciler
                 "EstimatedTokensPerSecond", "EstGpuMsPerToken", "EstCpuMsPerToken",
                 "EstDiskMsPerToken", "EstSyncMsPerToken",
                 "DiskReadMbps", "MajorFaultsPerSec", "PcieRxMbps", "PcieTxMbps",
+                "ExpertCacheHitRate", "ExpertPromotions", "ExpertUploadMb",
             ];
             foreach (var col in added.Where(c => !metricColumns.Contains(c)))
 #pragma warning disable EF1002 // column names come from the constant list above
@@ -191,7 +192,12 @@ public static class AppDbContextSchemaReconciler
 #pragma warning restore EF1002
         }
 
-        if ((await GetColumnsAsync(db, "MemoryProfiles")).Count == 0)
+        var memoryColumns = await GetColumnsAsync(db, "MemoryProfiles");
+        if (memoryColumns.Count > 0 && !memoryColumns.Contains("ExpertCacheEnabled"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE \"MemoryProfiles\" ADD COLUMN \"ExpertCacheEnabled\" INTEGER NOT NULL DEFAULT 1");
+
+        if (memoryColumns.Count == 0)
             await db.Database.ExecuteSqlRawAsync(
                 """
                 CREATE TABLE IF NOT EXISTS "MemoryProfiles" (
@@ -207,6 +213,7 @@ public static class AppDbContextSchemaReconciler
                     "FlashAttention" INTEGER NOT NULL,
                     "ParallelSequences" INTEGER NOT NULL,
                     "RoutingProfilerEnabled" INTEGER NOT NULL,
+                    "ExpertCacheEnabled" INTEGER NOT NULL DEFAULT 1,
                     "ProfilerWindowTokens" INTEGER NOT NULL,
                     "RebalancePolicy" TEXT NOT NULL,
                     "RebalanceThreshold" REAL NOT NULL,

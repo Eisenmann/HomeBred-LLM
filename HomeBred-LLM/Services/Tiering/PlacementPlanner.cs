@@ -67,6 +67,17 @@ public sealed class PlacementPlan
     public double ColdReadsPerToken { get; init; }
     public int GraphSplits { get; init; }
 
+    // ── Phase 2: per-expert VRAM slots (patched llama.cpp, see ExpertCacheBackend) ──
+    /// <summary>Expert slots per MoE layer in VRAM; 0 = per-layer expert placement (Phase 1).</summary>
+    public int ExpertSlotsPerLayer { get; init; }
+    public long ExpertCacheBytes { get; init; }
+
+    /// <summary>Experts to make resident per layer at load (hottest first).</summary>
+    public IReadOnlyDictionary<int, int[]> ResidentExperts { get; init; } = new Dictionary<int, int[]>();
+
+    /// <summary>Expected share of routed picks served from VRAM slots.</summary>
+    public double ExpertCacheHitRate { get; init; }
+
     public bool Fits { get; init; }
     public required IReadOnlyList<string> Warnings { get; init; }
     public required PerTokenEstimate Estimate { get; init; }
@@ -90,7 +101,32 @@ public static class PlacementPlanner
         RuntimeSettings settings,
         TierBudget budget,
         HardwareSpec hw,
-        ExpertUsageProfile? profile = null)
+        ExpertUsageProfile? profile = null,
+        bool? expertSlots = null)
+    {
+        // A loaded model's mode is fixed: re-planning it (rebalancer) must not switch modes.
+        if (expertSlots is { } forced)
+            return PlanCore(catalog, settings, budget, hw, profile, forced && hw.HasExpertCache && catalog.IsMoe);
+
+        var classic = PlanCore(catalog, settings, budget, hw, profile, expertSlots: false);
+        if (!hw.HasExpertCache || !catalog.IsMoe || !classic.UsesGpu) return classic;
+
+        // Per-expert slots trade a CPU-side redirect read and extra syncs for a better
+        // VRAM hit rate on skewed routing — use them only when the model says it's faster.
+        var slotted = PlanCore(catalog, settings, budget, hw, profile, expertSlots: true);
+        return slotted.ExpertSlotsPerLayer > 0 && slotted.Fits &&
+               slotted.Estimate.TokensPerSecond > classic.Estimate.TokensPerSecond * 1.02
+            ? slotted
+            : classic;
+    }
+
+    private static PlacementPlan PlanCore(
+        TensorCatalog catalog,
+        RuntimeSettings settings,
+        TierBudget budget,
+        HardwareSpec hw,
+        ExpertUsageProfile? profile,
+        bool expertSlots)
     {
         var shape = catalog.Shape;
         var warnings = new List<string>();
@@ -135,6 +171,10 @@ public static class PlacementPlanner
 
         // ── GPU fill ──────────────────────────────────────────────────────
         var gpu = new HashSet<CatalogTensor>(ReferenceEqualityComparer.Instance);
+        var slotsPerLayer = 0;
+        long slotBytes = 0;
+        var resident = new Dictionary<int, int[]>();
+        bool IsResident(int layer, int e) => resident.TryGetValue(layer, out var r) && Array.IndexOf(r, e) >= 0;
         if (useGpu)
         {
             bool TryPlace(CatalogTensor t)
@@ -165,11 +205,39 @@ public static class PlacementPlanner
                 gpuLayers.Add(g.Key);
             }
 
-            // Routed experts of GPU layers: every layer reads exactly n_used experts per
-            // token, so each fused block has the same value per byte — fill greedily.
-            foreach (var g in byLayer.Where(g => gpuLayers.Contains(g.Key)))
-                foreach (var t in g.Where(t => t.Kind == TensorKind.ExpertFfn).OrderByDescending(t => t.Bytes))
-                    TryPlace(t);
+            var gpuExpertBytes = byLayer.Where(g => gpuLayers.Contains(g.Key))
+                .SelectMany(g => g).Where(t => t.IsExpert).Sum(t => t.Bytes);
+            if (expertSlots && gpuExpertBytes > vramLeft)
+            {
+                // Phase 2: keep every routed-expert tensor host-side and give each MoE
+                // layer the same number of VRAM slots, filled with its hottest experts.
+                var moeLayers = catalog.Tensors.Where(t => t.IsExpert).GroupBy(t => t.Layer).ToList();
+                var perSlot = moeLayers.Sum(g => g.Sum(t => t.BytesPerExpert));
+                var nExpert = moeLayers.Max(g => g.Max(t => t.ExpertCount));
+                slotsPerLayer = perSlot > 0 ? (int)Math.Min(nExpert - 1, vramLeft * 0.98 / perSlot) : 0;
+                if (slotsPerLayer >= 1)
+                {
+                    slotBytes = slotsPerLayer * perSlot;
+                    vramLeft -= slotBytes;
+                    foreach (var g in moeLayers)
+                    {
+                        var n = g.Max(t => t.ExpertCount);
+                        resident[g.Key] = Enumerable.Range(0, n)
+                            .OrderByDescending(e => Share(profile, g.Key, e, n)).ThenBy(e => e)
+                            .Take(slotsPerLayer).ToArray();
+                    }
+                }
+                else slotsPerLayer = 0;
+            }
+
+            if (slotsPerLayer == 0)
+            {
+                // Routed experts of GPU layers: every layer reads exactly n_used experts per
+                // token, so each fused block has the same value per byte — fill greedily.
+                foreach (var g in byLayer.Where(g => gpuLayers.Contains(g.Key)))
+                    foreach (var t in g.Where(t => t.Kind == TensorKind.ExpertFfn).OrderByDescending(t => t.Bytes))
+                        TryPlace(t);
+            }
         }
 
         var cpu = catalog.Tensors.Where(t => !gpu.Contains(t)).ToList();
@@ -208,7 +276,8 @@ public static class PlacementPlanner
             for (var e = 0; e < n; e++)
             {
                 var share = Share(profile, layer, e, n);
-                candidates.Add((layer, e, bytesPerExpert, k * share));
+                // VRAM-resident experts are read host-side only as the top-1 redirect.
+                candidates.Add((layer, e, bytesPerExpert, IsResident(layer, e) ? share : k * share));
             }
         }
         foreach (var c in candidates.OrderByDescending(c => c.Reads / Math.Max(1, c.Bytes)).ThenBy(c => c.Layer).ThenBy(c => c.Expert))
@@ -245,6 +314,8 @@ public static class PlacementPlanner
         long gpuPerToken = gpu.Where(t => t.IsAlwaysOn).Sum(t => t.Bytes)
                            + (long)gpu.Where(t => t.IsExpert).Sum(t => t.Bytes * shape.ExpertReadFraction)
                            + (kvOnGpu ? kvRead : 0);
+        double cacheHitSum = 0;
+        var cacheLayers = 0;
 
         var embeddingRow = shape.EmbeddingLength * 2L;
         long cpuPerToken = cpu.Where(t => t.IsAlwaysOn).Sum(t => t.Bytes)
@@ -254,8 +325,21 @@ public static class PlacementPlanner
         foreach (var (layer, tensors) in expertLayers)
         {
             var n = tensors.Max(t => t.ExpertCount);
+            var bpe = tensors.Sum(t => t.BytesPerExpert);
+            if (slotsPerLayer > 0)
+            {
+                var hit = resident.TryGetValue(layer, out var r) ? r.Sum(e => Share(profile, layer, e, n)) : 0;
+                cacheHitSum += hit;
+                cacheLayers++;
+                // GPU path reads the resident picks plus slot 0 for misses; the CPU path
+                // reads the top-1 expert again when it is resident (redirect).
+                gpuPerToken += (long)(bpe * Math.Min(k, k * hit + 1));
+                cpuExpertBytes += hit * bpe;
+                warmExpertBytes += hit * bpe;
+            }
             for (var e = 0; e < n; e++)
             {
+                if (slotsPerLayer > 0 && IsResident(layer, e)) continue;
                 var reads = k * Share(profile, layer, e, n);
                 foreach (var t in tensors)
                 {
@@ -284,6 +368,7 @@ public static class PlacementPlanner
 
         var hitRate = cpuExpertBytes > 0 ? warmExpertBytes / cpuExpertBytes : 1.0;
         var splits = CountSplits(catalog, gpu, useGpu);
+        if (slotsPerLayer > 0) splits += 2 * cacheLayers; // GPU slot path + CPU path in every MoE layer
 
         // ── Verdict & warnings ────────────────────────────────────────────
         var fits = budget.AllowDisk || coldBytes == 0;
@@ -309,9 +394,13 @@ public static class PlacementPlanner
             WarmTensors = warmTensors.ToList(),
             WarmExperts = warmExperts,
             WarmRanges = catalog.FilePath is null ? [] : BuildRanges(cpu, warmTensors, warmExperts),
-            UsesGpu = useGpu && gpu.Count > 0,
+            UsesGpu = useGpu && (gpu.Count > 0 || slotsPerLayer > 0),
             KvOnGpu = kvOnGpu,
-            VramWeightBytes = gpu.Sum(t => t.Bytes),
+            VramWeightBytes = gpu.Sum(t => t.Bytes) + slotBytes,
+            ExpertSlotsPerLayer = slotsPerLayer,
+            ExpertCacheBytes = slotBytes,
+            ResidentExperts = resident,
+            ExpertCacheHitRate = cacheLayers > 0 ? cacheHitSum / cacheLayers : 0,
             VramKvBytes = vramKv,
             VramComputeBytes = vramCompute,
             VramOverheadBytes = useGpu ? budget.VramOverheadBytes : 0,
@@ -353,6 +442,19 @@ public static class PlacementPlanner
         }
         return all > 0 ? warm / all : 1.0;
     }
+
+    /// <summary>Expected VRAM-slot hit rate (share of routed picks) of a residency under a routing profile.</summary>
+    public static double ExpectedCacheHitRate(IReadOnlyDictionary<int, int[]> residency, int expertCount, ExpertUsageProfile? usage)
+    {
+        if (residency.Count == 0) return 0;
+        return residency.Average(kv => kv.Value.Sum(e => Share(usage, kv.Key, e, expertCount)));
+    }
+
+    /// <summary>The hottest <paramref name="slots"/> experts of each layer under a routing profile.</summary>
+    public static Dictionary<int, int[]> HottestExperts(IEnumerable<int> layers, int expertCount, int slots, ExpertUsageProfile? usage) =>
+        layers.ToDictionary(l => l, l => Enumerable.Range(0, expertCount)
+            .OrderByDescending(e => Share(usage, l, e, expertCount)).ThenBy(e => e)
+            .Take(slots).ToArray());
 
     private static double Share(ExpertUsageProfile? p, int layer, int expert, int n) =>
         p is not null && p.Experts == n && p.HasData(layer) ? p.Share(layer, expert) : 1.0 / n;
@@ -457,6 +559,10 @@ internal static class PlacementPlanExtensions
         ColdBytesPerToken = p.ColdBytesPerToken,
         ColdReadsPerToken = p.ColdReadsPerToken,
         GraphSplits = p.GraphSplits,
+        ExpertSlotsPerLayer = p.ExpertSlotsPerLayer,
+        ExpertCacheBytes = p.ExpertCacheBytes,
+        ResidentExperts = p.ResidentExperts,
+        ExpertCacheHitRate = p.ExpertCacheHitRate,
         Fits = p.Fits,
         Warnings = p.Warnings,
         Estimate = e,

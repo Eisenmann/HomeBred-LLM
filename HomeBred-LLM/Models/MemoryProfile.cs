@@ -52,6 +52,9 @@ public class MemoryProfile
     /// <summary>Tokens replayed per profiling pass (side-context window).</summary>
     public int ProfilerWindowTokens { get; set; } = 2048;
 
+    /// <summary>Use per-expert VRAM slots (Phase 2) when the patched llama.cpp is installed.</summary>
+    public bool ExpertCacheEnabled { get; set; } = true;
+
     public RebalancePolicy RebalancePolicy { get; set; } = RebalancePolicy.Auto;
 
     /// <summary>Minimum expected warm-tier hit-rate gain (0..1) before the rebalancer acts.</summary>

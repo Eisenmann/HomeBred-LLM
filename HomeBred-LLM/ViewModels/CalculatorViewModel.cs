@@ -94,6 +94,7 @@ public partial class CalculatorViewModel(
         var disk = profile.DiskSequentialMBs > 0
             ? $"disk {profile.DiskSequentialMBs:F0} MB/s seq, {profile.DiskLatencyMs:F2} ms latency{(_hw.DiskLooksRotational ? " (HDD-like)" : "")}"
             : "disk not benchmarked yet";
+        if (_hw.HasExpertCache) gpu += " · per-expert VRAM cache available";
         HardwareSummary = $"{gpu}\nRAM {RamTotalGb:F0} GB @ {_hw.RamBandwidthGBs:F0} GB/s · {_hw.CpuCores} threads · {disk}" +
                           $"\nMeasured {profile.MeasuredAt.ToLocalTime():g} · speed calibration ×{profile.SpeedCalibration:F2}";
     }

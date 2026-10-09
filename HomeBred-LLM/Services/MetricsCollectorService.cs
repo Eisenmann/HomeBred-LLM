@@ -85,6 +85,9 @@ public sealed class MetricsCollectorService(
                     MajorFaultsPerSec = faults,
                     PcieRxMbps = pcie?.RxMbps,
                     PcieTxMbps = pcie?.TxMbps,
+                    ExpertCacheHitRate = t?.ExpertCache is { } ec ? (float)ec.ExpectedHitRate : null,
+                    ExpertPromotions = t?.ExpertCache is { } ec2 ? ec2.PromotionsSinceLastSample : null,
+                    ExpertUploadMb = t?.ExpertCache is { } ec3 ? ec3.UploadBytesSinceLastSample / Mb : null,
                     ModelId = modelId,
                     RecordedAt = now,
                     GpuUtilizationPct = snap.GpuUtilPct,
@@ -100,6 +103,7 @@ public sealed class MetricsCollectorService(
                     PromptTokens = stats?.PromptTokens,
                     OutputTokens = stats?.OutputTokens,
                 });
+                tiering.MarkSampled(modelId);
             }
         }
         catch { /* Don't crash the collector on transient errors */ }

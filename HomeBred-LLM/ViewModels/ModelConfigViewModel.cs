@@ -40,6 +40,8 @@ public partial class ModelConfigViewModel(
     [ObservableProperty] private bool _kvOnGpu = true;
     [ObservableProperty] private bool _flashAttention = true;
     [ObservableProperty] private bool _routingProfilerEnabled = true;
+    [ObservableProperty] private bool _expertCacheEnabled = true;
+    [ObservableProperty] private string _expertCacheNote = "";
     [ObservableProperty] private int _profilerWindowTokens = 2048;
     [ObservableProperty] private RebalancePolicy _rebalancePolicy = RebalancePolicy.Auto;
     [ObservableProperty] private double _rebalanceThresholdPct = 3;
@@ -62,6 +64,7 @@ public partial class ModelConfigViewModel(
     partial void OnKvOnGpuChanged(bool value) => MemoryChanged();
     partial void OnFlashAttentionChanged(bool value) => MemoryChanged();
     partial void OnRoutingProfilerEnabledChanged(bool value) => MemoryChanged();
+    partial void OnExpertCacheEnabledChanged(bool value) => MemoryChanged();
     partial void OnProfilerWindowTokensChanged(int value) => MemoryChanged();
     partial void OnRebalancePolicyChanged(RebalancePolicy value) => MemoryChanged();
     partial void OnRebalanceThresholdPctChanged(double value) => MemoryChanged();
@@ -84,6 +87,7 @@ public partial class ModelConfigViewModel(
         m.KvOnGpu = KvOnGpu;
         m.FlashAttention = FlashAttention;
         m.RoutingProfilerEnabled = RoutingProfilerEnabled;
+        m.ExpertCacheEnabled = ExpertCacheEnabled;
         m.ProfilerWindowTokens = Math.Clamp(ProfilerWindowTokens, 256, 32768);
         m.RebalancePolicy = RebalancePolicy;
         m.RebalanceThreshold = (float)Math.Clamp(RebalanceThresholdPct / 100, 0, 1);
@@ -96,6 +100,7 @@ public partial class ModelConfigViewModel(
         var hw = await hardware.GetCurrentSpecAsync();
         VramTotalGb = Math.Max(1, Math.Round(hw.VramTotalBytes / (double)(1L << 30), 1));
         RamTotalGb = Math.Max(1, Math.Round(hw.RamTotalBytes / (double)(1L << 30), 0));
+        ExpertCacheNote = tiering.ExpertCache.Description;
         HardwareNote = hw.HasGpuBackend
             ? $"{hw.GpuName ?? "GPU"}: {VramTotalGb:F1} GB VRAM ({hw.VramFreeBytes / (double)(1L << 30):F1} GB free) · RAM {RamTotalGb:F0} GB ({hw.RamAvailableBytes / (double)(1L << 30):F1} GB available)"
             : $"No GPU device in the llama.cpp backend — CPU only. RAM {RamTotalGb:F0} GB ({hw.RamAvailableBytes / (double)(1L << 30):F1} GB available)";
@@ -114,6 +119,7 @@ public partial class ModelConfigViewModel(
             KvOnGpu = _memory.KvOnGpu;
             FlashAttention = _memory.FlashAttention;
             RoutingProfilerEnabled = _memory.RoutingProfilerEnabled;
+            ExpertCacheEnabled = _memory.ExpertCacheEnabled;
             ProfilerWindowTokens = _memory.ProfilerWindowTokens;
             RebalancePolicy = _memory.RebalancePolicy;
             RebalanceThresholdPct = Math.Round(_memory.RebalanceThreshold * 100, 1);
@@ -148,7 +154,10 @@ public partial class ModelConfigViewModel(
               (w.Locking ? $", {TierBreakdownViewModel.Gb(w.LockedBytes)} locked" : "") +
               (w.LockError is { } e ? $" ({e})" : "") + (w.Busy ? " …" : "")
             : "no warm tier";
-        RuntimeStatus = $"Running tiered: est. {snap.CalibratedEstimate.TokensPerSecond:F1} tok/s · {warm} · " +
+        var cache = snap.ExpertCache is { } c
+            ? $"VRAM expert cache {c.SlotsPerLayer} slots × {c.Layers} layers, hit rate {c.ExpectedHitRate:P0}, {c.Promotions:N0} uploads · "
+            : "";
+        RuntimeStatus = $"Running tiered: est. {snap.CalibratedEstimate.TokensPerSecond:F1} tok/s · {cache}{warm} · " +
                         $"expected hit rate {snap.WarmHitRate:P0} · profiler: {snap.ProfilerStatus}" +
                         (snap.TokensProfiled > 0 ? $" ({snap.TokensProfiled:N0} tokens)" : "");
         RebalanceSuggestion = snap.Suggestion;
@@ -391,6 +400,7 @@ public partial class ModelConfigViewModel(
                 KvOnGpu = d.KvOnGpu;
                 FlashAttention = d.FlashAttention;
                 RoutingProfilerEnabled = d.RoutingProfilerEnabled;
+                ExpertCacheEnabled = d.ExpertCacheEnabled;
                 ProfilerWindowTokens = d.ProfilerWindowTokens;
                 RebalancePolicy = d.RebalancePolicy;
                 RebalanceThresholdPct = d.RebalanceThreshold * 100;

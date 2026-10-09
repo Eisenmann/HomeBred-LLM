@@ -1,51 +1,50 @@
-/*
- * hb_expertcache — proposed C ABI for HomeBred-LLM's Phase 2 per-expert VRAM
- * cache (see docs/tiered-memory-architecture.md). NOT IMPLEMENTED YET.
- *
- * Build against the exact llama.cpp revision LLamaSharp ships. The library
- * replaces MUL_MAT_ID for routed-expert tensors with a slot-indirected kernel:
- * each layer owns `slots` GPU expert slots; a residency table maps
- * (layer, expert) -> slot or -1. Misses are computed on the CPU from the
- * memory-mapped (warm/cold) weights; hot misses are promoted asynchronously on
- * a dedicated stream. The managed side (NativeExpertCacheBackend) only needs
- * the functions below.
- */
+// Copy of the C API added by native/llama.cpp-hbec/hbec.patch (include/llama-hbec.h).
+// HomeBred-LLM expert cache ("hbec") — per-expert VRAM slots for MoE models.
+//
+// Private patch on top of llama.cpp (not an upstream feature). For each MoE
+// layer whose routed-expert tensors live in host memory, a small set of
+// "slots" (copies of individual experts) is allocated on a GPU buffer. The
+// MoE graph then runs two paths: resident experts are computed from the GPU
+// slots, the rest from the host tensors on the CPU, and the results are
+// combined with the routing weights so the output is identical to the
+// unpatched computation. Which experts are resident is decided by the caller
+// (HomeBred-LLM's rebalancer) via hbec_set_residency between decode calls.
 #pragma once
-#include <stdint.h>
-#include <stdbool.h>
+
+#include "llama.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef struct hbec_cache hbec_cache;
+#define HBEC_VERSION 1
 
-typedef struct {
-    int32_t  n_layers;
-    int32_t  n_experts;
-    int32_t  slots_per_layer;   /* chosen by the planner from the VRAM budget */
-    int32_t  prefetch_lookahead; /* 0 = off, 1 = gate look-ahead for layer N+1 */
-    int32_t  device;            /* backend device index (CUDA0 = 0) */
-} hbec_params;
+#define HBEC_DEVICE_FIRST_GPU (-1) // first non-CPU device of the model
+#define HBEC_DEVICE_CPU       (-2) // host buffer (testing: exercises the graph path without a GPU)
 
-typedef struct {
-    int64_t hits, misses, promotions, evictions, bytes_uploaded;
-} hbec_counters;
+LLAMA_API int32_t hbec_version(void);
 
-int32_t      hbec_version(void);
+// Configures the expert cache for the NEXT llama_model_load_from_file* call in
+// this process (consumed by it). slots_per_layer <= 0 disables the cache.
+LLAMA_API void    hbec_set_load_config(int32_t slots_per_layer, int32_t device);
 
-/* Attach to a loaded llama_model / llama_context (opaque pointers from llama.h). */
-hbec_cache * hbec_attach(void * llama_model, void * llama_context, const hbec_params * params);
-void         hbec_detach(hbec_cache * cache);
+// Number of layers with an expert cache (0 = cache not active for this model).
+LLAMA_API int32_t hbec_model_layers(const struct llama_model * model);
+LLAMA_API int32_t hbec_model_slots (const struct llama_model * model);
+LLAMA_API int64_t hbec_model_bytes (const struct llama_model * model);
+LLAMA_API bool    hbec_layer_enabled(const struct llama_model * model, int32_t il);
 
-/* Seed residency with the hottest experts (pairs of layer, expert). */
-void         hbec_prefill(hbec_cache * cache, const int32_t * layer_expert_pairs, int32_t n_pairs);
+// Makes `experts` (up to slots_per_layer ids) resident in layer il's slots.
+// Experts already resident keep their slot; only missing ones are uploaded.
+// Must not run concurrently with a decode on any context of this model.
+// Returns the number of experts uploaded, or a negative error code.
+LLAMA_API int32_t hbec_set_residency(struct llama_model * model, int32_t il, const int32_t * experts, int32_t n_experts);
 
-/* Per-expert routing priority used by the eviction policy (e.g. decayed counts). */
-void         hbec_set_priority(hbec_cache * cache, int32_t layer, const float * priority, int32_t n_experts);
+// Writes the expert id held by each slot (-1 = empty); returns the slot count.
+LLAMA_API int32_t hbec_get_residency(const struct llama_model * model, int32_t il, int32_t * out_experts, int32_t capacity);
 
-/* Counters since the previous call. */
-hbec_counters hbec_drain_counters(hbec_cache * cache);
+// Counters accumulated since the previous call.
+LLAMA_API void    hbec_drain_counters(struct llama_model * model, int64_t * promotions, int64_t * evictions, int64_t * bytes_uploaded);
 
 #ifdef __cplusplus
 }

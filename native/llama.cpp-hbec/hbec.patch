@@ -1,0 +1,634 @@
+diff --git a/include/llama-hbec.h b/include/llama-hbec.h
+new file mode 100644
+index 000000000..c0ef5c417
+--- /dev/null
++++ b/include/llama-hbec.h
+@@ -0,0 +1,50 @@
++// HomeBred-LLM expert cache ("hbec") — per-expert VRAM slots for MoE models.
++//
++// Private patch on top of llama.cpp (not an upstream feature). For each MoE
++// layer whose routed-expert tensors live in host memory, a small set of
++// "slots" (copies of individual experts) is allocated on a GPU buffer. The
++// MoE graph then runs two paths: resident experts are computed from the GPU
++// slots, the rest from the host tensors on the CPU, and the results are
++// combined with the routing weights so the output is identical to the
++// unpatched computation. Which experts are resident is decided by the caller
++// (HomeBred-LLM's rebalancer) via hbec_set_residency between decode calls.
++#pragma once
++
++#include "llama.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define HBEC_VERSION 1
++
++#define HBEC_DEVICE_FIRST_GPU (-1) // first non-CPU device of the model
++#define HBEC_DEVICE_CPU       (-2) // host buffer (testing: exercises the graph path without a GPU)
++
++LLAMA_API int32_t hbec_version(void);
++
++// Configures the expert cache for the NEXT llama_model_load_from_file* call in
++// this process (consumed by it). slots_per_layer <= 0 disables the cache.
++LLAMA_API void    hbec_set_load_config(int32_t slots_per_layer, int32_t device);
++
++// Number of layers with an expert cache (0 = cache not active for this model).
++LLAMA_API int32_t hbec_model_layers(const struct llama_model * model);
++LLAMA_API int32_t hbec_model_slots (const struct llama_model * model);
++LLAMA_API int64_t hbec_model_bytes (const struct llama_model * model);
++LLAMA_API bool    hbec_layer_enabled(const struct llama_model * model, int32_t il);
++
++// Makes `experts` (up to slots_per_layer ids) resident in layer il's slots.
++// Experts already resident keep their slot; only missing ones are uploaded.
++// Must not run concurrently with a decode on any context of this model.
++// Returns the number of experts uploaded, or a negative error code.
++LLAMA_API int32_t hbec_set_residency(struct llama_model * model, int32_t il, const int32_t * experts, int32_t n_experts);
++
++// Writes the expert id held by each slot (-1 = empty); returns the slot count.
++LLAMA_API int32_t hbec_get_residency(const struct llama_model * model, int32_t il, int32_t * out_experts, int32_t capacity);
++
++// Counters accumulated since the previous call.
++LLAMA_API void    hbec_drain_counters(struct llama_model * model, int64_t * promotions, int64_t * evictions, int64_t * bytes_uploaded);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 121c21fed..304ea733b 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -17,6 +17,7 @@ add_library(llama
+             llama-cparams.cpp
+             llama-grammar.cpp
+             llama-graph.cpp
++            llama-hbec.cpp
+             llama-hparams.cpp
+             llama-impl.cpp
+             llama-io.cpp
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 8e2b6ab8e..7fddf5aec 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-graph.h"
++#include "llama-hbec.h"
+ 
+ #include "llama-impl.h"
+ #include "llama-batch.h"
+@@ -1427,22 +1428,40 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         cb(cur, "ffn_moe_weighted", il);
+     }
+ 
++    // HomeBred expert cache: the expert FFN is factored into a lambda so it can run
++    // twice — once on GPU-resident expert slots, once on the host expert tensors.
++    auto run_experts = [&](ggml_tensor * cur,
++                           ggml_tensor * up_exps, ggml_tensor * gate_exps, ggml_tensor * down_exps,
++                           ggml_tensor * gate_up_exps, ggml_tensor * selected_experts,
++                           bool slots, const char * sfx) -> ggml_tensor * {
++    GGML_UNUSED(sfx);
++    // per-expert biases/scales and LoRA only apply to the original tensors
++    ggml_tensor * up_exps_b_     = slots ? nullptr : up_exps_b;
++    ggml_tensor * gate_exps_b_   = slots ? nullptr : gate_exps_b;
++    ggml_tensor * down_exps_b_   = slots ? nullptr : down_exps_b;
++    ggml_tensor * gate_up_exps_b_= slots ? nullptr : gate_up_exps_b;
++    ggml_tensor * up_exps_s_     = slots ? nullptr : up_exps_s;
++    ggml_tensor * gate_exps_s_   = slots ? nullptr : gate_exps_s;
++    ggml_tensor * down_exps_s_   = slots ? nullptr : down_exps_s;
++    auto mm_id = [&](ggml_tensor * w, ggml_tensor * x, ggml_tensor * ids) {
++        return slots ? ggml_mul_mat_id(ctx0, w, x, ids) : build_lora_mm_id(w, x, ids);
++    };
+     ggml_tensor * up = nullptr;
+     ggml_tensor * experts = nullptr;
+ 
+     if (gate_up_exps) {
+         // merged gate_up path: one mul_mat_id, then split into gate and up views
+-        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts); // [n_ff*2, n_expert_used, n_tokens]
++        ggml_tensor * gate_up = mm_id(gate_up_exps, cur, selected_experts); // [n_ff*2, n_expert_used, n_tokens]
+         cb(gate_up, "ffn_moe_gate_up", il);
+ 
+-        if (gate_up_exps_b) {
+-            gate_up = ggml_add_id(ctx0, gate_up, gate_up_exps_b, selected_experts);
++        if (gate_up_exps_b_) {
++            gate_up = ggml_add_id(ctx0, gate_up, gate_up_exps_b_, selected_experts);
+             cb(gate_up, "ffn_moe_gate_up_biased", il);
+         }
+ 
+-        // apply per-expert scale2 to merged gate_up (use up_exps_s since gate and up are fused)
+-        if (up_exps_s) {
+-            ggml_tensor * s = ggml_reshape_3d(ctx0, up_exps_s, 1, n_expert, 1);
++        // apply per-expert scale2 to merged gate_up (use up_exps_s_ since gate and up are fused)
++        if (up_exps_s_) {
++            ggml_tensor * s = ggml_reshape_3d(ctx0, up_exps_s_, 1, n_expert, 1);
+             s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+             s = ggml_get_rows(ctx0, s, selected_experts); // [1, n_expert_used, n_tokens]
+             gate_up = ggml_mul(ctx0, gate_up, s);
+@@ -1456,17 +1475,17 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         cb(up, "ffn_moe_up", il);
+     } else {
+         // separate gate and up path
+-        up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
++        up = mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+         cb(up, "ffn_moe_up", il);
+ 
+-        if (up_exps_b) {
+-            up = ggml_add_id(ctx0, up, up_exps_b, selected_experts);
++        if (up_exps_b_) {
++            up = ggml_add_id(ctx0, up, up_exps_b_, selected_experts);
+             cb(up, "ffn_moe_up_biased", il);
+         }
+ 
+         // apply per-expert scale2 to up
+-        if (up_exps_s) {
+-            ggml_tensor * s = ggml_reshape_3d(ctx0, up_exps_s, 1, n_expert, 1);
++        if (up_exps_s_) {
++            ggml_tensor * s = ggml_reshape_3d(ctx0, up_exps_s_, 1, n_expert, 1);
+             s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+             s = ggml_get_rows(ctx0, s, selected_experts); // [1, n_expert_used, n_tokens]
+             up = ggml_mul(ctx0, up, s);
+@@ -1474,20 +1493,20 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+         }
+ 
+         if (gate_exps) {
+-            cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
++            cur = mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+             cb(cur, "ffn_moe_gate", il);
+         } else {
+             cur = up;
+         }
+ 
+-        if (gate_exps_b) {
+-            cur = ggml_add_id(ctx0, cur, gate_exps_b, selected_experts);
++        if (gate_exps_b_) {
++            cur = ggml_add_id(ctx0, cur, gate_exps_b_, selected_experts);
+             cb(cur, "ffn_moe_gate_biased", il);
+         }
+ 
+         // apply per-expert scale2 to gate
+-        if (gate_exps_s) {
+-            ggml_tensor * s = ggml_reshape_3d(ctx0, gate_exps_s, 1, n_expert, 1);
++        if (gate_exps_s_) {
++            ggml_tensor * s = ggml_reshape_3d(ctx0, gate_exps_s_, 1, n_expert, 1);
+             s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+             s = ggml_get_rows(ctx0, s, selected_experts); // [1, n_expert_used, n_tokens]
+             cur = ggml_mul(ctx0, cur, s);
+@@ -1564,25 +1583,72 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+             GGML_ABORT("fatal error");
+     }
+ 
+-    experts = build_lora_mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
++    experts = mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
+     cb(experts, "ffn_moe_down", il);
+ 
+-    if (down_exps_b) {
+-        experts = ggml_add_id(ctx0, experts, down_exps_b, selected_experts);
++    if (down_exps_b_) {
++        experts = ggml_add_id(ctx0, experts, down_exps_b_, selected_experts);
+         cb(experts, "ffn_moe_down_biased", il);
+     }
+ 
+     // apply per-expert scale2 to down
+-    if (down_exps_s) {
+-        ggml_tensor * s = ggml_reshape_3d(ctx0, down_exps_s, 1, n_expert, 1);
++    if (down_exps_s_) {
++        ggml_tensor * s = ggml_reshape_3d(ctx0, down_exps_s_, 1, n_expert, 1);
+         s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
+         s = ggml_get_rows(ctx0, s, selected_experts); // [1, n_expert_used, n_tokens]
+         experts = ggml_mul(ctx0, experts, s);
+         cb(experts, "ffn_moe_down_scaled", il);
+     }
++    return experts;
++    };
++
++    hbec_layer_view hb;
++    const bool use_hbec = down_exps != nullptr && !weight_before_ffn &&
++        (loras == nullptr || loras->empty()) &&
++        !(arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) &&
++        hbec_find_layer(down_exps, hb);
+ 
+-    if (!weight_before_ffn) {
+-        experts = ggml_mul(ctx0, experts, weights);
++    ggml_tensor * experts = nullptr;
++    if (!use_hbec) {
++        experts = run_experts(cur, up_exps, gate_exps, down_exps, gate_up_exps, selected_experts, false, "");
++        if (!weight_before_ffn) {
++            experts = ggml_mul(ctx0, experts, weights);
++            cb(experts, "ffn_moe_weighted", il);
++        }
++    } else {
++        // Each pick is computed on exactly one path; the other path's weight is exactly 0,
++        // so the sum below equals the unpatched result.
++        //   resident pick:     GPU slot map[e] with weight w, CPU path weight 0
++        //   non-resident pick: CPU expert e with weight w,    GPU path weight 0
++        // CPU ids of resident picks are redirected to the token's top-1 expert so the CPU
++        // reads no extra expert weights for them (top-1 is usually needed anyway).
++        // map/mask are shared by all tokens, so look up the flattened ids ([k*T]).
++        ggml_tensor * flat_ids = ggml_reshape_1d(ctx0, ggml_cont(ctx0, selected_experts), n_expert_used * n_tokens);
++        ggml_tensor * res = ggml_get_rows(ctx0, hb.mask, flat_ids);                // [1, k*T] F32
++        res = ggml_reshape_3d(ctx0, res, 1, n_expert_used, n_tokens);              // [1, k, T]
++        cb(res, "ffn_moe_hbec_resident", il);
++        ggml_tensor * slot_ids = ggml_get_rows(ctx0, hb.map, flat_ids);            // [1, k*T] I32
++        slot_ids = ggml_reshape_2d(ctx0, slot_ids, n_expert_used, n_tokens);
++        cb(slot_ids, "ffn_moe_hbec_slots", il);
++
++        ggml_tensor * ids_f = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);   // [k, T]
++        ggml_tensor * top1  = ggml_cont(ctx0, ggml_view_2d(ctx0, ids_f, 1, n_tokens, ids_f->nb[1], 0)); // [1, T]
++        ggml_tensor * res2  = ggml_reshape_2d(ctx0, res, n_expert_used, n_tokens);
++        ggml_tensor * cpu_f = ggml_sub(ctx0, ids_f, ggml_mul(ctx0, res2, ggml_sub(ctx0, ids_f, top1)));
++        ggml_tensor * cpu_ids = ggml_cast(ctx0, cpu_f, GGML_TYPE_I32);
++        cb(cpu_ids, "ffn_moe_hbec_cpu_ids", il);
++
++        ggml_tensor * w_gpu = ggml_mul(ctx0, weights, res);                        // [1, k, T]
++        ggml_tensor * w_cpu = ggml_sub(ctx0, weights, w_gpu);
++
++        ggml_tensor * out_gpu = run_experts(cur, hb.slot_up, hb.slot_gate, hb.slot_down, hb.slot_gate_up, slot_ids, true, "_hbec");
++        out_gpu = ggml_mul(ctx0, out_gpu, w_gpu);
++        cb(out_gpu, "ffn_moe_hbec_gpu", il);
++        ggml_tensor * out_cpu = run_experts(cur, up_exps, gate_exps, down_exps, gate_up_exps, cpu_ids, false, "");
++        out_cpu = ggml_mul(ctx0, out_cpu, w_cpu);
++        cb(out_cpu, "ffn_moe_hbec_cpu", il);
++
++        experts = ggml_add(ctx0, out_gpu, out_cpu);
+         cb(experts, "ffn_moe_weighted", il);
+     }
+ 
+diff --git a/src/llama-hbec.cpp b/src/llama-hbec.cpp
+new file mode 100644
+index 000000000..da3c32721
+--- /dev/null
++++ b/src/llama-hbec.cpp
+@@ -0,0 +1,307 @@
++#include "llama-hbec.h"
++#include "llama-impl.h"
++#include "llama-model.h"
++#include "../include/llama-hbec.h"
++
++#include "ggml-backend.h"
++#include "ggml-cpu.h"
++
++#include <algorithm>
++#include <cstdlib>
++#include <cstring>
++#include <memory>
++#include <mutex>
++#include <unordered_map>
++#include <vector>
++
++namespace {
++
++struct hbec_layer {
++    int il = -1;
++    // host-resident source tensors (full expert set)
++    ggml_tensor * src_up = nullptr, * src_gate = nullptr, * src_down = nullptr, * src_gate_up = nullptr;
++    hbec_layer_view view;
++    std::vector<int32_t> slot_expert; // expert id per slot, -1 = empty
++};
++
++struct hbec_state {
++    int32_t n_slots  = 0;
++    int32_t n_expert = 0;
++    ggml_context * ctx = nullptr;
++    ggml_backend_buffer_t buf = nullptr;
++    std::vector<hbec_layer> layers;
++    std::unordered_map<int, size_t> by_il;
++    int64_t promotions = 0, evictions = 0, bytes_uploaded = 0;
++
++    ~hbec_state() {
++        if (buf) ggml_backend_buffer_free(buf);
++        if (ctx) ggml_free(ctx);
++    }
++};
++
++std::mutex g_mutex;
++int32_t g_pending_slots  = 0;
++int32_t g_pending_device = HBEC_DEVICE_FIRST_GPU;
++std::unordered_map<const llama_model *, std::unique_ptr<hbec_state>> g_models;
++std::unordered_map<const ggml_tensor *, hbec_layer *> g_by_down;
++
++// Only plain host layouts can be sliced byte-wise (repacked CPU buffers interleave rows).
++bool is_plain_host(const ggml_tensor * t) {
++    if (t == nullptr || t->buffer == nullptr || t->data == nullptr) return false;
++    if (!ggml_backend_buffer_is_host(t->buffer)) return false;
++    const char * name = ggml_backend_buft_name(ggml_backend_buffer_get_type(t->buffer));
++    if (name == nullptr) return false;
++    const size_t n = strlen(name);
++    return strcmp(name, "CPU") == 0 || strcmp(name, "CPU_Mapped") == 0 || (n > 5 && strcmp(name + n - 5, "_Host") == 0);
++}
++
++ggml_backend_buffer_type_t pick_buft(const llama_model & model, int32_t device) {
++    if (device == HBEC_DEVICE_CPU) return ggml_backend_cpu_buffer_type();
++    std::vector<ggml_backend_dev_t> gpus;
++    for (const auto & d : model.devices) {
++        if (d.is_meta) continue;
++        if (ggml_backend_dev_type(d.dev) != GGML_BACKEND_DEVICE_TYPE_CPU) gpus.push_back(d.dev);
++    }
++    if (gpus.empty()) return nullptr;
++    const size_t idx = device >= 0 ? (size_t) device : 0;
++    return idx < gpus.size() ? ggml_backend_dev_buffer_type(gpus[idx]) : nullptr;
++}
++
++ggml_tensor * new_slots(ggml_context * ctx, const ggml_tensor * src, int32_t n_slots, const char * name, int il) {
++    if (src == nullptr) return nullptr;
++    ggml_tensor * t = ggml_new_tensor_3d(ctx, src->type, src->ne[0], src->ne[1], n_slots);
++    ggml_format_name(t, "hbec.%d.%s", il, name);
++    return t;
++}
++
++void upload(hbec_state & st, const ggml_tensor * src, ggml_tensor * slots, int32_t expert, int32_t slot) {
++    if (src == nullptr || slots == nullptr) return;
++    const size_t bytes = src->nb[2];
++    GGML_ASSERT(slots->nb[2] == bytes);
++    // HBEC_TEST_SKIP_UPLOAD=1 leaves slots zeroed: a negative control proving the slot path is used.
++    static const bool skip = getenv("HBEC_TEST_SKIP_UPLOAD") != nullptr;
++    if (!skip)
++        ggml_backend_tensor_set(slots, (const char *) src->data + (size_t) expert * bytes, (size_t) slot * bytes, bytes);
++    st.bytes_uploaded += (int64_t) bytes;
++}
++
++} // namespace
++
++void hbec_on_model_loaded(llama_model & model) {
++    int32_t slots, device;
++    {
++        std::lock_guard<std::mutex> lock(g_mutex);
++        slots  = g_pending_slots;
++        device = g_pending_device;
++        g_pending_slots = 0; // one-shot
++    }
++    if (slots <= 0) return;
++
++    const int32_t n_expert = (int32_t) model.hparams.n_expert;
++    if (n_expert <= 1) return;
++    slots = std::min(slots, n_expert);
++
++    if (model.arch == LLM_ARCH_LLAMA4) {
++        LLAMA_LOG_WARN("%s: expert cache not supported for this architecture\n", __func__);
++        return;
++    }
++
++    ggml_backend_buffer_type_t buft = pick_buft(model, device);
++    if (buft == nullptr) {
++        LLAMA_LOG_WARN("%s: no device for the expert cache (device=%d)\n", __func__, device);
++        return;
++    }
++
++    auto st = std::make_unique<hbec_state>();
++    st->n_slots  = slots;
++    st->n_expert = n_expert;
++
++    // collect eligible layers
++    for (size_t il = 0; il < model.layers.size(); ++il) {
++        const auto & l = model.layers[il];
++        if (l.ffn_down_exps == nullptr) continue;
++        if (l.ffn_gate_exps_b || l.ffn_down_exps_b || l.ffn_up_exps_b || l.ffn_gate_up_exps_b) continue;
++        if (l.ffn_gate_exps_s || l.ffn_down_exps_s || l.ffn_up_exps_s) continue;
++        if (l.ffn_down_exps->ne[2] != n_expert) continue;
++        const bool fused = l.ffn_gate_up_exps != nullptr;
++        if (!is_plain_host(l.ffn_down_exps)) continue;
++        if (fused ? !is_plain_host(l.ffn_gate_up_exps) : (!is_plain_host(l.ffn_up_exps) || (l.ffn_gate_exps && !is_plain_host(l.ffn_gate_exps)))) continue;
++
++        hbec_layer hl;
++        hl.il          = (int) il;
++        hl.src_down    = l.ffn_down_exps;
++        hl.src_gate_up = fused ? l.ffn_gate_up_exps : nullptr;
++        hl.src_up      = fused ? nullptr : l.ffn_up_exps;
++        hl.src_gate    = fused ? nullptr : l.ffn_gate_exps;
++        st->layers.push_back(hl);
++    }
++    if (st->layers.empty()) {
++        LLAMA_LOG_INFO("%s: no host-resident routed experts — expert cache inactive\n", __func__);
++        return;
++    }
++
++    ggml_init_params ip = {
++        /*.mem_size   =*/ ggml_tensor_overhead() * (st->layers.size() * 6 + 4),
++        /*.mem_buffer =*/ nullptr,
++        /*.no_alloc   =*/ true,
++    };
++    st->ctx = ggml_init(ip);
++    for (auto & hl : st->layers) {
++        hl.view.slot_up      = new_slots(st->ctx, hl.src_up,      slots, "up",      hl.il);
++        hl.view.slot_gate    = new_slots(st->ctx, hl.src_gate,    slots, "gate",    hl.il);
++        hl.view.slot_down    = new_slots(st->ctx, hl.src_down,    slots, "down",    hl.il);
++        hl.view.slot_gate_up = new_slots(st->ctx, hl.src_gate_up, slots, "gate_up", hl.il);
++        hl.view.map  = ggml_new_tensor_2d(st->ctx, GGML_TYPE_I32, 1, n_expert);
++        hl.view.mask = ggml_new_tensor_2d(st->ctx, GGML_TYPE_F32, 1, n_expert);
++        ggml_format_name(hl.view.map,  "hbec.%d.map",  hl.il);
++        ggml_format_name(hl.view.mask, "hbec.%d.mask", hl.il);
++        hl.slot_expert.assign(slots, -1);
++    }
++
++    st->buf = ggml_backend_alloc_ctx_tensors_from_buft(st->ctx, buft);
++    if (st->buf == nullptr) {
++        LLAMA_LOG_WARN("%s: failed to allocate the expert cache on %s\n", __func__, ggml_backend_buft_name(buft));
++        return;
++    }
++    // Zeroed slots compute finite (zero) outputs, so 0-weighted unused picks never inject NaNs.
++    ggml_backend_buffer_clear(st->buf, 0);
++    ggml_backend_buffer_set_usage(st->buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++
++    LLAMA_LOG_INFO("%s: expert cache: %zu layers x %d slots on %s (%.2f MiB)\n", __func__,
++        st->layers.size(), slots, ggml_backend_buft_name(buft), ggml_backend_buffer_get_size(st->buf) / 1024.0 / 1024.0);
++
++    std::lock_guard<std::mutex> lock(g_mutex);
++    for (size_t i = 0; i < st->layers.size(); ++i) {
++        st->by_il[st->layers[i].il] = i;
++        g_by_down[st->layers[i].src_down] = &st->layers[i];
++    }
++    g_models[&model] = std::move(st);
++}
++
++void hbec_on_model_free(const llama_model * model) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    auto it = g_models.find(model);
++    if (it == g_models.end()) return;
++    for (auto & hl : it->second->layers) g_by_down.erase(hl.src_down);
++    g_models.erase(it);
++}
++
++bool hbec_find_layer(const ggml_tensor * down_exps, hbec_layer_view & out) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    auto it = g_by_down.find(down_exps);
++    if (it == g_by_down.end()) return false;
++    out = it->second->view;
++    return true;
++}
++
++// ── C API ────────────────────────────────────────────────────────────────
++
++int32_t hbec_version(void) { return HBEC_VERSION; }
++
++void hbec_set_load_config(int32_t slots_per_layer, int32_t device) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    g_pending_slots  = slots_per_layer;
++    g_pending_device = device;
++}
++
++static hbec_state * find_state(const llama_model * model) {
++    auto it = g_models.find(model);
++    return it == g_models.end() ? nullptr : it->second.get();
++}
++
++int32_t hbec_model_layers(const llama_model * model) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    auto * st = find_state(model);
++    return st ? (int32_t) st->layers.size() : 0;
++}
++
++int32_t hbec_model_slots(const llama_model * model) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    auto * st = find_state(model);
++    return st ? st->n_slots : 0;
++}
++
++int64_t hbec_model_bytes(const llama_model * model) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    auto * st = find_state(model);
++    return st && st->buf ? (int64_t) ggml_backend_buffer_get_size(st->buf) : 0;
++}
++
++bool hbec_layer_enabled(const llama_model * model, int32_t il) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    auto * st = find_state(model);
++    return st && st->by_il.count(il) > 0;
++}
++
++int32_t hbec_set_residency(llama_model * model, int32_t il, const int32_t * experts, int32_t n_experts) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    auto * st = find_state(model);
++    if (!st) return -1;
++    auto li = st->by_il.find(il);
++    if (li == st->by_il.end()) return -2;
++    auto & hl = st->layers[li->second];
++    if (n_experts < 0 || (n_experts > 0 && experts == nullptr)) return -3;
++
++    // desired set (deduplicated, valid, capped at the slot count)
++    std::vector<int32_t> want;
++    for (int32_t i = 0; i < n_experts && (int32_t) want.size() < st->n_slots; ++i) {
++        const int32_t e = experts[i];
++        if (e < 0 || e >= st->n_expert) continue;
++        if (std::find(want.begin(), want.end(), e) == want.end()) want.push_back(e);
++    }
++
++    // free slots whose expert is no longer wanted
++    for (auto & e : hl.slot_expert) {
++        if (e >= 0 && std::find(want.begin(), want.end(), e) == want.end()) {
++            e = -1;
++            st->evictions++;
++        }
++    }
++
++    int32_t uploaded = 0;
++    for (int32_t e : want) {
++        if (std::find(hl.slot_expert.begin(), hl.slot_expert.end(), e) != hl.slot_expert.end()) continue;
++        auto free_it = std::find(hl.slot_expert.begin(), hl.slot_expert.end(), -1);
++        if (free_it == hl.slot_expert.end()) break;
++        const int32_t slot = (int32_t) (free_it - hl.slot_expert.begin());
++        upload(*st, hl.src_up,      hl.view.slot_up,      e, slot);
++        upload(*st, hl.src_gate,    hl.view.slot_gate,    e, slot);
++        upload(*st, hl.src_down,    hl.view.slot_down,    e, slot);
++        upload(*st, hl.src_gate_up, hl.view.slot_gate_up, e, slot);
++        *free_it = e;
++        st->promotions++;
++        uploaded++;
++    }
++
++    std::vector<int32_t> map(st->n_expert, 0);
++    std::vector<float>   mask(st->n_expert, 0.0f);
++    for (int32_t s = 0; s < (int32_t) hl.slot_expert.size(); ++s) {
++        const int32_t e = hl.slot_expert[s];
++        if (e < 0) continue;
++        map[e]  = s;
++        mask[e] = 1.0f;
++    }
++    ggml_backend_tensor_set(hl.view.map,  map.data(),  0, map.size()  * sizeof(int32_t));
++    ggml_backend_tensor_set(hl.view.mask, mask.data(), 0, mask.size() * sizeof(float));
++    return uploaded;
++}
++
++int32_t hbec_get_residency(const llama_model * model, int32_t il, int32_t * out_experts, int32_t capacity) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    auto * st = find_state(model);
++    if (!st) return 0;
++    auto li = st->by_il.find(il);
++    if (li == st->by_il.end()) return 0;
++    const auto & slots = st->layers[li->second].slot_expert;
++    for (int32_t i = 0; i < (int32_t) slots.size() && i < capacity && out_experts; ++i) out_experts[i] = slots[i];
++    return (int32_t) slots.size();
++}
++
++void hbec_drain_counters(llama_model * model, int64_t * promotions, int64_t * evictions, int64_t * bytes_uploaded) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    auto * st = find_state(model);
++    if (promotions)     *promotions     = st ? st->promotions     : 0;
++    if (evictions)      *evictions      = st ? st->evictions      : 0;
++    if (bytes_uploaded) *bytes_uploaded = st ? st->bytes_uploaded : 0;
++    if (st) st->promotions = st->evictions = st->bytes_uploaded = 0;
++}
+diff --git a/src/llama-hbec.h b/src/llama-hbec.h
+new file mode 100644
+index 000000000..bc97b17e8
+--- /dev/null
++++ b/src/llama-hbec.h
+@@ -0,0 +1,22 @@
++#pragma once
++
++#include "ggml.h"
++
++struct llama_model;
++
++// Internal view of one cached layer, used by the graph builder.
++struct hbec_layer_view {
++    ggml_tensor * slot_up      = nullptr;
++    ggml_tensor * slot_gate    = nullptr;
++    ggml_tensor * slot_down    = nullptr;
++    ggml_tensor * slot_gate_up = nullptr;
++    ggml_tensor * map          = nullptr; // I32 [1, n_expert]: expert -> slot (0 when not resident)
++    ggml_tensor * mask         = nullptr; // F32 [1, n_expert]: 1 when resident
++};
++
++// Called by llama.cpp's model loader / destructor.
++void hbec_on_model_loaded(llama_model & model);
++void hbec_on_model_free(const llama_model * model);
++
++// Lookup by the layer's routed down-projection tensor (unique per layer).
++bool hbec_find_layer(const ggml_tensor * down_exps, hbec_layer_view & out);
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index b265394ef..395572f68 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-model.h"
++#include "llama-hbec.h"
+ 
+ #include "llama-arch.h"
+ #include "llama-hparams.h"
+@@ -668,6 +669,7 @@ llama_model::llama_model(const llama_model_params & params) : params(params), pi
+ }
+ 
+ llama_model::~llama_model() {
++    hbec_on_model_free(this);
+     for (auto * lora : loras) {
+         delete lora;
+     }
+diff --git a/src/llama.cpp b/src/llama.cpp
+index 484372d8d..ea675a73b 100644
+--- a/src/llama.cpp
++++ b/src/llama.cpp
+@@ -9,6 +9,7 @@
+ #include "llama-model-loader.h"
+ #include "llama-model-saver.h"
+ #include "llama-model.h"
++#include "llama-hbec.h"
+ 
+ #include "ggml.h"
+ #include "ggml-cpp.h"
+@@ -1097,6 +1098,8 @@ static struct llama_model * llama_model_load_from_file_impl(
+         return nullptr;
+     }
+ 
++    hbec_on_model_loaded(*model); // HomeBred expert cache (no-op unless configured)
++
+     return model;
+ }
+ 

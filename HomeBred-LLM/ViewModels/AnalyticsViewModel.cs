@@ -74,6 +74,9 @@ public partial class AnalyticsViewModel(
                 (w.Locking ? $", {TierBreakdownViewModel.Gb(w.LockedBytes)} locked" : "") +
                 (snap.WarmResidentBytes is { } r ? $", {TierBreakdownViewModel.Gb(r)} resident" : "") +
                 (w.LockError is { } e ? $" — {e}" : "") + ". ") +
+            (snap.ExpertCache is { } c
+                ? $"VRAM expert cache: {c.SlotsPerLayer} slots × {c.Layers} layers ({TierBreakdownViewModel.Gb(c.Bytes)}), expected hit rate {c.ExpectedHitRate:P0}, {c.Promotions:N0} uploads / {c.Evictions:N0} evictions ({TierBreakdownViewModel.Gb(c.UploadBytes)}). "
+                : "") +
             $"Expected warm hit rate {snap.WarmHitRate:P0}. Profiler: {snap.ProfilerStatus}." +
             (snap.Suggestion is { } sug ? $" {sug}" : "");
     }
@@ -246,6 +249,7 @@ public partial class AnalyticsViewModel(
         [
             L("Decode tok/s", points.Select(p => p.DecodeTokensPerSecond).ToArray(), "#10B981"),
             L("Estimated tok/s", points.Select(p => p.EstimatedTokensPerSecond).ToArray(), "#6B7280", 1.5f),
+            L("Expert-cache hit % ÷ 10", points.Select(p => p.ExpertCacheHitRate * 10).ToArray(), "#8B5CF6", 1.5f),
             L("Prefill tok/s ÷ 10", points.Select(p => p.PrefillTokensPerSecond / 10).ToArray(), "#0EA5E9", 1.5f),
         ];
         IoSeries =
@@ -254,6 +258,7 @@ public partial class AnalyticsViewModel(
             L("PCIe RX MB/s", points.Select(p => p.PcieRxMbps).ToArray(), "#8B5CF6"),
             L("PCIe TX MB/s", points.Select(p => p.PcieTxMbps).ToArray(), "#EC4899", 1.5f),
             L("Major faults/s", points.Select(p => p.MajorFaultsPerSec).ToArray(), "#EF4444", 1.5f),
+            L("Expert uploads MB", points.Select(p => p.ExpertUploadMb).ToArray(), "#10B981", 1.5f),
         ];
         static StackedAreaSeries<float?> S(string name, float?[] v, string color) => new()
         {

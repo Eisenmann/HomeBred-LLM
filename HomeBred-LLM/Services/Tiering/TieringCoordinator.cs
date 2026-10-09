@@ -25,7 +25,20 @@ public sealed record TieringSnapshot(
     string? Suggestion,
     string ProfilerStatus,
     long TokensProfiled,
-    double? RoutingConcentration);
+    double? RoutingConcentration,
+    ExpertCacheStatus? ExpertCache = null);
+
+/// <summary>Phase 2 VRAM expert-slot cache state of a running model.</summary>
+public sealed record ExpertCacheStatus(
+    int Layers,
+    int SlotsPerLayer,
+    long Bytes,
+    double ExpectedHitRate,
+    long Promotions,
+    long Evictions,
+    long UploadBytes,
+    long PromotionsSinceLastSample,
+    long UploadBytesSinceLastSample);
 
 /// <summary>
 /// Owns the tiered-memory lifecycle of every loaded GGUF model: plans the
@@ -49,6 +62,10 @@ public sealed class TieringCoordinator : IDisposable
         public DateTime LastPersist { get; set; } = DateTime.UtcNow;
         public DateTime UsageSeenAt { get; set; }
         public string? Suggestion { get; set; }
+        public IExpertCacheHandle? ExpertCache { get; set; }
+        public Dictionary<int, int[]> Residency { get; set; } = new();
+        public long Promotions, Evictions, UploadBytes;          // since load
+        public long SampledPromotions, SampledUploadBytes;       // at the last metrics sample
         public long? ResidentBytes { get; set; }
         public DateTime ResidentMeasuredAt { get; set; }
         public int Busy;
@@ -158,6 +175,7 @@ public sealed class TieringCoordinator : IDisposable
         var hw = await _probe.GetCurrentSpecAsync(ct);
         if (_runtimes.TryGetValue(model.Id, out var rt))
             hw = hw with { VramFreeBytes = hw.VramFreeBytes + rt.Plan.VramTotalBytes }; // its own VRAM is "free" for it
+        hw = hw with { HasExpertCache = hw.HasExpertCache && p.ExpertCacheEnabled };
         var settings = SettingsFor(cfg, p, hwp.ComputeBufferCalibration);
         var budget = ResolveBudget(p, hw, catalog.Shape, settings);
         var usage = _runtimes.TryGetValue(model.Id, out var r2) ? r2.Prepared.Usage : await LoadUsageAsync(model.Id, catalog.Shape);
@@ -187,6 +205,7 @@ public sealed class TieringCoordinator : IDisposable
             return null;
         }
 
+        hw = hw with { HasExpertCache = hw.HasExpertCache && p.ExpertCacheEnabled };
         var settings = SettingsFor(cfg, p, hwp.ComputeBufferCalibration);
         var budget = ResolveBudget(p, hw, catalog.Shape, settings);
         var usage = catalog.IsMoe ? await LoadUsageAsync(modelId, catalog.Shape) : null;
@@ -197,6 +216,9 @@ public sealed class TieringCoordinator : IDisposable
                 "The model does not fit the memory budgets: " + string.Join(" ", plan.Warnings) +
                 " Raise the RAM budget or allow the disk tier (Config → Memory tiers).");
 
+        if (plan.ExpertSlotsPerLayer > 0)
+            progress?.Report($"Expert cache: {plan.ExpertSlotsPerLayer} VRAM slots per MoE layer " +
+                             $"({PlacementPlanner.Gb(plan.ExpertCacheBytes)}), expected hit rate {plan.ExpertCacheHitRate:P0}");
         progress?.Report(
             $"Tiers: VRAM {PlacementPlanner.Gb(plan.VramWeightBytes)} · RAM {PlacementPlanner.Gb(plan.WarmBytes)} · " +
             $"disk {PlacementPlanner.Gb(plan.ColdBytes)} · est. {PerformanceEstimator.Estimate(plan, hw, hwp.SpeedCalibration).TokensPerSecond:F1} tok/s");
@@ -217,9 +239,22 @@ public sealed class TieringCoordinator : IDisposable
     // ── Lifecycle ───────────────────────────────────────────────────────────
 
     public void OnLoaded(Guid modelId, PreparedLoad prep, LLamaWeights weights, IContextParams contextParams,
-        Func<Func<Task>, Task> exclusive)
+        Func<Func<Task>, Task> exclusive, IExpertCacheHandle? expertCache = null)
     {
         var rt = new Runtime { ModelId = modelId, Prepared = prep, Plan = prep.Plan, Exclusive = exclusive };
+
+        if (expertCache is not null)
+        {
+            // Initial residency from the plan (no decode can run yet, so no lock needed).
+            rt.ExpertCache = expertCache;
+            foreach (var (layer, experts) in prep.Plan.ResidentExperts)
+            {
+                if (!expertCache.LayerEnabled(layer)) continue;
+                expertCache.SetResidency(layer, experts);
+                rt.Residency[layer] = expertCache.GetResidency(layer).Where(e => e >= 0).ToArray();
+            }
+            DrainCache(rt);
+        }
 
         var path = prep.Plan.Catalog.FilePath;
         if (path is not null && prep.Plan.CpuWeightBytes > 0)
@@ -302,6 +337,7 @@ public sealed class TieringCoordinator : IDisposable
             {
                 await ProfileIfIdleAsync(rt);
                 Rebalance(rt);
+                await RebalanceExpertCacheAsync(rt);
                 await PersistUsageAsync(rt, force: false);
             }
             catch
@@ -332,6 +368,59 @@ public sealed class TieringCoordinator : IDisposable
         StateChanged?.Invoke(rt.ModelId);
     }
 
+    private static void DrainCache(Runtime rt)
+    {
+        if (rt.ExpertCache is null) return;
+        var c = rt.ExpertCache.Drain();
+        rt.Promotions += c.Promotions;
+        rt.Evictions += c.Evictions;
+        rt.UploadBytes += c.BytesUploaded;
+    }
+
+    /// <summary>
+    /// Phase 2 rebalancing: re-targets each layer's VRAM slots at its hottest
+    /// experts when that raises the expected slot hit rate enough. Uploads run
+    /// under the model's chat lock, i.e. strictly between decodes.
+    /// </summary>
+    private async Task RebalanceExpertCacheAsync(Runtime rt)
+    {
+        var cache = rt.ExpertCache;
+        var usage = rt.Prepared.Usage;
+        var policy = rt.Prepared.Settings.RebalancePolicy;
+        if (cache is null || usage is null || rt.Exclusive is null || policy == RebalancePolicy.Off) return;
+        if (DateTime.UtcNow - rt.LastActivity < IdleBeforeBackgroundWork) return;
+
+        var n = rt.Plan.Catalog.Shape.ExpertCount;
+        var desired = PlacementPlanner.HottestExperts(rt.Residency.Keys, n, cache.SlotsPerLayer, usage);
+        var current = PlacementPlanner.ExpectedCacheHitRate(rt.Residency, n, usage);
+        var target = PlacementPlanner.ExpectedCacheHitRate(desired, n, usage);
+        if (target - current <= Math.Max(rt.Prepared.Settings.RebalanceThreshold, 1e-4)) return;
+
+        if (policy == RebalancePolicy.Suggest)
+        {
+            rt.Suggestion = $"Re-filling the VRAM expert slots would raise their hit rate {current:P0} → {target:P0}.";
+            StateChanged?.Invoke(rt.ModelId);
+            return;
+        }
+
+        await rt.Exclusive(() => Task.Run(() => ApplyResidency(rt, desired)));
+        rt.Suggestion = $"VRAM expert slots re-filled: hit rate {current:P0} → {target:P0}.";
+        StateChanged?.Invoke(rt.ModelId);
+    }
+
+    private static void ApplyResidency(Runtime rt, Dictionary<int, int[]> desired)
+    {
+        if (rt.ExpertCache is null) return;
+        foreach (var (layer, experts) in desired)
+        {
+            if (rt.Residency.TryGetValue(layer, out var cur) && cur.Length == experts.Length && !cur.Except(experts).Any())
+                continue;
+            rt.ExpertCache.SetResidency(layer, experts);
+            rt.Residency[layer] = rt.ExpertCache.GetResidency(layer).Where(e => e >= 0).ToArray();
+        }
+        DrainCache(rt);
+    }
+
     private void Rebalance(Runtime rt)
     {
         var usage = rt.Prepared.Usage;
@@ -343,7 +432,7 @@ public sealed class TieringCoordinator : IDisposable
 
         var p = rt.Prepared;
         var current = PlacementPlanner.ExpectedWarmHitRate(rt.Plan, usage);
-        var candidate = PlacementPlanner.Plan(rt.Plan.Catalog, rt.Plan.Settings, rt.Plan.Budget, p.Hardware, usage);
+        var candidate = PlacementPlanner.Plan(rt.Plan.Catalog, rt.Plan.Settings, rt.Plan.Budget, p.Hardware, usage, rt.Plan.ExpertSlotsPerLayer > 0);
         var gain = candidate.WarmHitRate - current;
         if (gain <= Math.Max(p.Settings.RebalanceThreshold, 1e-4))
         {
@@ -367,8 +456,15 @@ public sealed class TieringCoordinator : IDisposable
     /// <summary>Applies a pending rebalance suggestion now (Suggest policy).</summary>
     public void ApplySuggestedRebalance(Guid modelId)
     {
-        if (!_runtimes.TryGetValue(modelId, out var rt) || rt.Warm is null || rt.Prepared.Usage is null) return;
-        var candidate = PlacementPlanner.Plan(rt.Plan.Catalog, rt.Plan.Settings, rt.Plan.Budget, rt.Prepared.Hardware, rt.Prepared.Usage);
+        if (!_runtimes.TryGetValue(modelId, out var rt) || rt.Prepared.Usage is null) return;
+        if (rt.ExpertCache is not null && rt.Exclusive is not null)
+        {
+            var desired = PlacementPlanner.HottestExperts(rt.Residency.Keys, rt.Plan.Catalog.Shape.ExpertCount,
+                rt.ExpertCache.SlotsPerLayer, rt.Prepared.Usage);
+            _ = rt.Exclusive(() => Task.Run(() => ApplyResidency(rt, desired)));
+        }
+        if (rt.Warm is null) { rt.Suggestion = null; StateChanged?.Invoke(modelId); return; }
+        var candidate = PlacementPlanner.Plan(rt.Plan.Catalog, rt.Plan.Settings, rt.Plan.Budget, rt.Prepared.Hardware, rt.Prepared.Usage, rt.Plan.ExpertSlotsPerLayer > 0);
         rt.Plan = candidate;
         _ = rt.Warm.ApplyAsync(candidate.WarmRanges, rt.Prepared.Settings.LockWarmTier);
         rt.Suggestion = null;
@@ -415,6 +511,14 @@ public sealed class TieringCoordinator : IDisposable
             rt.ResidentMeasuredAt = DateTime.UtcNow;
         }
         var usage = rt.Prepared.Usage;
+        ExpertCacheStatus? cacheStatus = null;
+        if (rt.ExpertCache is { } cache)
+        {
+            cacheStatus = new ExpertCacheStatus(cache.Layers, cache.SlotsPerLayer, cache.Bytes,
+                PlacementPlanner.ExpectedCacheHitRate(rt.Residency, plan.Catalog.Shape.ExpertCount, usage),
+                rt.Promotions, rt.Evictions, rt.UploadBytes,
+                rt.Promotions - rt.SampledPromotions, rt.UploadBytes - rt.SampledUploadBytes);
+        }
         return new TieringSnapshot(
             plan,
             PerformanceEstimator.Estimate(plan, rt.Prepared.Hardware, rt.Prepared.SpeedCalibration),
@@ -424,7 +528,16 @@ public sealed class TieringCoordinator : IDisposable
             rt.Suggestion,
             rt.Profiler is null && rt.ProfilerStatus == "Off" ? (plan.Catalog.IsMoe ? "Off" : "Dense model — not needed") : rt.ProfilerStatus,
             rt.Profiler?.TokensProfiled ?? 0,
-            usage is { HasAnyData: true } ? usage.Concentration() : null);
+            usage is { HasAnyData: true } ? usage.Concentration() : null,
+            cacheStatus);
+    }
+
+    /// <summary>Marks the expert-cache counters as recorded (metrics collector, once per sample).</summary>
+    public void MarkSampled(Guid modelId)
+    {
+        if (!_runtimes.TryGetValue(modelId, out var rt)) return;
+        rt.SampledPromotions = rt.Promotions;
+        rt.SampledUploadBytes = rt.UploadBytes;
     }
 
     /// <summary>Routing histogram for the analytics heatmap: live if running, else the latest saved one.</summary>

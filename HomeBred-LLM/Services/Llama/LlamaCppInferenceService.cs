@@ -146,6 +146,12 @@ public sealed class LlamaCppInferenceService : IInferenceService, IDisposable
             if (tiered is not null)
                 LlamaPlacementApplier.Apply(parameters, tiered.Plan);
 
+            // Phase 2: arm the patched llama.cpp's per-expert VRAM slots for this load.
+            var wantExpertCache = tiered is { Plan.ExpertSlotsPerLayer: > 0 } && _tiering is not null &&
+                                  _tiering.ExpertCache.IsAvailable;
+            if (wantExpertCache)
+                _tiering!.ExpertCache.ConfigureNextLoad(tiered!.Plan.ExpertSlotsPerLayer);
+
             if (loraAdapters is { Count: > 0 })
             {
                 // NOTE: LLamaSharp 0.21.0 does not expose LoRA in its managed API
@@ -174,14 +180,18 @@ public sealed class LlamaCppInferenceService : IInferenceService, IDisposable
                 if (tiered is not null && _tiering is not null)
                 {
                     CalibrateComputeBuffer(tiered.Plan);
+                    var cache = wantExpertCache ? _tiering.ExpertCache.Attach(weights.NativeHandle.DangerousGetHandle()) : null;
+                    if (wantExpertCache && cache is null)
+                        progress?.Report("Expert cache did not activate (see native log) — experts run from RAM.");
                     _tiering.OnLoaded(modelId, tiered, weights, parameters,
-                        action => RunExclusiveAsync(loadedModel, action));
+                        action => RunExclusiveAsync(loadedModel, action), cache);
                 }
 
                 progress?.Report("Model loaded.");
             }
             catch (Exception ex)
             {
+                if (wantExpertCache) _tiering!.ExpertCache.ClearPendingLoad();
                 var nativeLog = string.Join('\n', _nativeLogBuffer.TakeRecentLines());
                 throw new InvalidOperationException(
                     $"Failed to load GGUF model from {modelPath}. " +

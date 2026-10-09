@@ -52,7 +52,10 @@ public sealed class TierBreakdownViewModel
                          : " · dense") +
                      $" · weights {Gb(catalog.TotalBytes)}" +
                      $" · KV {Gb(plan.VramKvBytes + plan.RamKvBytes)} ({(plan.KvOnGpu ? "VRAM" : "RAM")})" +
-                     (catalog.IsMoe && plan.CpuTensors.Any(t => t.IsExpert) ? $" · warm-tier hit rate {plan.WarmHitRate:P0}" : "");
+                     (catalog.IsMoe && plan.CpuTensors.Any(t => t.IsExpert) ? $" · warm-tier hit rate {plan.WarmHitRate:P0}" : "") +
+                     (plan.ExpertSlotsPerLayer > 0
+                         ? $" · VRAM expert cache {plan.ExpertSlotsPerLayer} slots/layer ({Gb(plan.ExpertCacheBytes)}), hit rate {plan.ExpertCacheHitRate:P0}"
+                         : "");
 
         return new TierBreakdownViewModel
         {

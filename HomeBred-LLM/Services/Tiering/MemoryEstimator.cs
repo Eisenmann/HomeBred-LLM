@@ -55,6 +55,9 @@ public sealed record HardwareSpec
 
     public bool IsMeasured { get; init; }
 
+    /// <summary>Patched llama.cpp with per-expert VRAM slots (Phase 2) is loaded.</summary>
+    public bool HasExpertCache { get; init; }
+
     public static HardwareSpec Fallback => new()
     {
         HasGpuBackend = false,

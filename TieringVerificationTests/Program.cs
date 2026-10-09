@@ -376,6 +376,121 @@ finally
     File.Delete(nativeDb);
 }
 
+// ── 12. Phase 2 planner: per-expert VRAM slots ─────────────────────────────
+Console.WriteLine("\n--- 12. Phase 2 planner: per-expert VRAM slots ---");
+{
+    var hwCache = hw with { HasExpertCache = true };
+    var pUniform = PlacementPlanner.Plan(moeSynth, ctx8k, budget, hwCache);
+    var pClassicSkew = PlacementPlanner.Plan(moeSynth, ctx8k, budget, hw, skew);
+    var pCacheSkew = PlacementPlanner.Plan(moeSynth, ctx8k, budget, hwCache, skew);
+    Console.WriteLine($"  uniform: slots={pUniform.ExpertSlotsPerLayer} est={pUniform.Estimate.TokensPerSecond:F2} | skew classic={pClassicSkew.Estimate.TokensPerSecond:F2} cached={pCacheSkew.Estimate.TokensPerSecond:F2} slots={pCacheSkew.ExpertSlotsPerLayer} hit={pCacheSkew.ExpertCacheHitRate:P0}");
+    Check(pCacheSkew.ExpertSlotsPerLayer >= 8 && pCacheSkew.ExpertCacheHitRate > 0.6, "skewed routing → slots chosen, hot set mostly covered");
+    Check(pCacheSkew.Estimate.TokensPerSecond > pClassicSkew.Estimate.TokensPerSecond, "slots beat per-layer blocks on skewed routing");
+    Check(pCacheSkew.VramTotalBytes <= budget.VramBytes, $"slot plan respects VRAM ({pCacheSkew.VramTotalBytes / GiB:F1} GB)");
+    Check(pCacheSkew.GpuTensors.All(t => !t.IsExpert) && moeSynth.Tensors.Where(t => t.IsExpert).All(pCacheSkew.CpuTensors.Contains),
+        "slot mode keeps every routed-expert tensor host-side");
+    Check(pCacheSkew.ResidentExperts.Count == moeShape.LayerCount &&
+          pCacheSkew.ResidentExperts.Values.All(r => r.Length == pCacheSkew.ExpertSlotsPerLayer && r.Take(16).All(e => e < 16)),
+        "initial residency = each layer's hottest experts");
+    Check(pUniform.ExpertSlotsPerLayer == 0 || pUniform.Estimate.TokensPerSecond >= PlacementPlanner.Plan(moeSynth, ctx8k, budget, hw).Estimate.TokensPerSecond,
+        "planner only picks slots when the model estimates a gain");
+    var small = PlacementPlanner.Plan(TensorCatalog.Synthetic(ModelShape.Synthetic(30, 3, 128, 8), 4.85), ctx8k, budget, hwCache, skew);
+    Check(small.ExpertSlotsPerLayer == 0 && small.CpuTensors.All(t => t.Kind == TensorKind.Embedding), "MoE that fits VRAM entirely uses no slots");
+    var hot = PlacementPlanner.HottestExperts([0, 1], 128, 4, skew);
+    Check(hot[0].Length == 4 && hot[0].All(e => e < 16), "HottestExperts picks from the hot set");
+    Check(PlacementPlanner.ExpectedCacheHitRate(hot, 128, skew) > PlacementPlanner.ExpectedCacheHitRate(
+        new Dictionary<int, int[]> { [0] = [100, 101, 102, 103], [1] = [100, 101, 102, 103] }, 128, skew), "hit rate ranks residencies");
+    Check(LlamaPlacementApplier.BuildOverrides(pCacheSkew).Any(p => p.Contains("_exps")), "overrides pin expert tensors to CPU in slot mode");
+}
+
+// ── 13. Phase 2 native: patched llama.cpp expert cache through LLamaSharp ───
+Console.WriteLine("\n--- 13. native: per-expert slots via patched llama.cpp (hbec) ---");
+var backend = new NativeExpertCacheBackend();
+if (!backend.IsAvailable)
+{
+    Console.WriteLine("SKIP: stock llama.cpp natives (no hbec_* exports) — build native/llama.cpp-hbec to run this section");
+}
+else
+{
+    float[] Logits(int slots, int[]? resident, out IExpertCacheHandle? handle)
+    {
+        if (slots > 0) backend.ConfigureNextLoad(slots, NativeExpertCacheBackend.DeviceCpu);
+        var mp = new LLama.Common.ModelParams(moePath) { GpuLayerCount = 0, ContextSize = 512, BatchSize = 256 };
+        using var w = LLama.LLamaWeights.LoadFromFile(mp);
+        handle = backend.Attach(w.NativeHandle.DangerousGetHandle());
+        if (handle is not null && resident is not null)
+            for (var l = 0; l < handle.Layers; l++)
+                if (handle.LayerEnabled(l)) handle.SetResidency(l, resident);
+        using var ctx = w.CreateContext(mp);
+        var toks = ctx.Tokenize("hello world the model is an expert of the world", addBos: true);
+        var batch = new LLama.Native.LLamaBatch();
+        for (var i = 0; i < toks.Length; i++) batch.Add(toks[i], i, LLama.Native.LLamaSeqId.Zero, true);
+        ctx.NativeHandle.Decode(batch);
+        var result = new List<float>();
+        for (var i = 0; i < toks.Length; i++) result.AddRange(ctx.NativeHandle.GetLogitsIth(i).ToArray());
+        if (handle is not null) { var c = handle.Drain(); Console.WriteLine($"  slots={handle.SlotsPerLayer} layers={handle.Layers} uploads={c.Promotions} bytes={c.BytesUploaded}"); }
+        return result.ToArray();
+    }
+    var baseLogits = Logits(0, null, out var noCache);
+    Check(noCache is null, "no cache without configuration");
+    var cached = Logits(4, [0, 3, 5], out var h);
+    Check(h is { Layers: 4, SlotsPerLayer: 4 }, "cache attached to all 4 MoE layers");
+    var maxDiff = baseLogits.Zip(cached, (a, b) => Math.Abs(a - b)).Max();
+    Check(maxDiff < 1e-4, $"logits identical with experts in slots (max |Δ| = {maxDiff:G3})");
+    var full = Logits(8, [0, 1, 2, 3, 4, 5, 6, 7], out _);
+    Check(baseLogits.Zip(full, (a, b) => Math.Abs(a - b)).Max() < 1e-4, "logits identical with all experts resident");
+
+    // Coordinator glue: initial residency from the plan, then the rebalancer re-fills
+    // slots from a learned (skewed) routing profile — slots on the CPU device here.
+    var cdb = Path.Combine(Path.GetTempPath(), $"hb-hbec-{Guid.NewGuid():N}.db");
+    try
+    {
+        var copts = new DbContextOptionsBuilder<AppDbContext>().UseSqlite($"Data Source={cdb};Pooling=False").Options;
+        var cf = new Factory(copts);
+        await using (var db = cf.CreateDbContext()) { await db.Database.EnsureCreatedAsync(); await db.ReconcileSchemaAsync(); }
+        var m = new LocalModel { Name = "tiny-moe", Format = ModelFormat.Gguf, LocalPath = moePath };
+        await using (var db = cf.CreateDbContext()) { db.Models.Add(m); await db.SaveChangesAsync(); }
+
+        var tinyCatalog = await TensorCatalog.FromFileAsync(moePath);
+        var fakeHw = hw with { HasExpertCache = true };
+        var rs = new RuntimeSettings { ContextSize = 512, UBatch = 256 };
+        var fixedVram = new TierBudget().VramOverheadBytes + MemoryEstimator.ComputeBufferBytes(tinyCatalog.Shape, rs)
+                        + MemoryEstimator.KvCacheBytes(tinyCatalog.Shape, rs)
+                        + tinyCatalog.Tensors.Where(t => t.IsAlwaysOn).Sum(t => t.Bytes);
+        var tinyBudget = new TierBudget { VramBytes = fixedVram + tinyCatalog.ExpertBytes * 3 / 8 + (64 << 10), RamBytes = 1L << 30 };
+        var tinyPlan = PlacementPlanner.Plan(tinyCatalog, rs, tinyBudget, fakeHw, null, expertSlots: true);
+        Check(tinyPlan.ExpertSlotsPerLayer is > 0 and < 8, $"tiny MoE slot plan ({tinyPlan.ExpertSlotsPerLayer} slots/layer)");
+
+        backend.ConfigureNextLoad(tinyPlan.ExpertSlotsPerLayer, NativeExpertCacheBackend.DeviceCpu);
+        var mp = new LLama.Common.ModelParams(moePath) { GpuLayerCount = 0, ContextSize = 512 };
+        using var w = LLama.LLamaWeights.LoadFromFile(mp);
+        var handle = backend.Attach(w.NativeHandle.DangerousGetHandle())!;
+        var usage = new ExpertUsageProfile(4, 8);
+        var mem = new MemoryProfile { ModelId = m.Id, RebalancePolicy = RebalancePolicy.Auto, RebalanceThreshold = 0.01f, RoutingProfilerEnabled = false };
+        using var coord2 = new TieringCoordinator(cf, new HardwareProbe(new HomebredLLM.Services.GpuMetricsService(), cf));
+        coord2.OnLoaded(m.Id, new PreparedLoad(tinyPlan, mem, usage, fakeHw, 1.0), w, mp, f => f(), handle);
+        var initial = handle.GetResidency(0);
+        Check(initial.OrderBy(e => e).SequenceEqual(tinyPlan.ResidentExperts[0].OrderBy(e => e)), $"initial residency from plan [{string.Join(",", initial)}]");
+
+        for (var t = 0; t < 500; t++)
+            for (var l = 0; l < 4; l++)
+                usage.Record(l, [7, 6]);
+        var cacheSnap = coord2.GetSnapshot(m.Id)!.ExpertCache!;
+        Check(cacheSnap.ExpectedHitRate < 0.5, $"skew makes current residency look bad ({cacheSnap.ExpectedHitRate:P0})");
+        for (var i = 0; i < 45 && !handle.GetResidency(0).Contains(7); i++) await Task.Delay(1000);
+        var after = handle.GetResidency(0);
+        Check(after.Contains(7) && after.Contains(6), $"rebalancer re-filled slots with the hot experts [{string.Join(",", after)}]");
+        var cs = coord2.GetSnapshot(m.Id)!.ExpertCache!;
+        Check(cs.ExpectedHitRate > 0.99 && cs.Promotions > 0 && cs.UploadBytes > 0, $"hit rate {cs.ExpectedHitRate:P0}, {cs.Promotions} uploads, {cs.Evictions} evictions");
+        coord2.OnUnloaded(m.Id);
+    }
+    finally
+    {
+        SqliteConnection.ClearAllPools();
+        File.Delete(cdb);
+    }
+}
+
 Console.WriteLine($"\n{(failures == 0 ? "ALL PASSED" : $"{failures} FAILURE(S)")}");
 return failures;
 
