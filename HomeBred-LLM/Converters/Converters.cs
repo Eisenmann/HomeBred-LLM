@@ -1,3 +1,4 @@
+using Avalonia.Data;
 using Avalonia.Data.Converters;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -19,7 +20,7 @@ public class PathToBitmapConverter : IValueConverter
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        throw new NotSupportedException();
+        BindingOperations.DoNothing; // one-way converter: never write back (Run/TextBox default to TwoWay)
 }
 
 public class StatusToColorConverter : IValueConverter
@@ -37,7 +38,7 @@ public class StatusToColorConverter : IValueConverter
             : new SolidColorBrush(Color.FromRgb(107, 114, 128));
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        throw new NotSupportedException();
+        BindingOperations.DoNothing; // one-way converter: never write back (Run/TextBox default to TwoWay)
 }
 
 public class BytesToReadableConverter : IValueConverter
@@ -51,7 +52,7 @@ public class BytesToReadableConverter : IValueConverter
     }
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        throw new NotSupportedException();
+        BindingOperations.DoNothing; // one-way converter: never write back (Run/TextBox default to TwoWay)
 }
 
 // Returns bool — Avalonia binds IsVisible to bool directly
@@ -87,7 +88,7 @@ public class RoleToBubbleColorConverter : IValueConverter
             : Brushes.Gray;
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        throw new NotSupportedException();
+        BindingOperations.DoNothing; // one-way converter: never write back (Run/TextBox default to TwoWay)
 }
 
 public class RoleToAlignConverter : IValueConverter
@@ -98,5 +99,5 @@ public class RoleToAlignConverter : IValueConverter
             : HorizontalAlignment.Left;
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        throw new NotSupportedException();
+        BindingOperations.DoNothing; // one-way converter: never write back (Run/TextBox default to TwoWay)
 }

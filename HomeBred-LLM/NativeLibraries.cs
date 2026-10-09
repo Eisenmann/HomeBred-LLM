@@ -14,12 +14,31 @@ public static class NativeLibraries
 {
     public static string? CustomDirectory { get; private set; }
 
+    /// <summary>Per-user folder the in-app GPU setup installs into (writable, survives app updates).</summary>
+    public static string UserDirectory => Path.Combine(AppPaths.Base, "native");
+
+    private static string LlamaFile =>
+        OperatingSystem.IsWindows() ? "llama.dll" : OperatingSystem.IsMacOS() ? "libllama.dylib" : "libllama.so";
+
+    /// <summary>Folder to install into / look at: env override, a folder that already holds llama, else the per-user folder.</summary>
+    public static string InstallDirectory
+    {
+        get
+        {
+            var env = Environment.GetEnvironmentVariable("HOMEBRED_LLAMA_NATIVE_DIR");
+            if (!string.IsNullOrWhiteSpace(env)) return env;
+            var app = Path.Combine(AppContext.BaseDirectory, "native");
+            return File.Exists(Path.Combine(app, LlamaFile)) ? app : UserDirectory;
+        }
+    }
+
     public static void ConfigureCustomLlama()
     {
         var candidates = new[]
         {
             Environment.GetEnvironmentVariable("HOMEBRED_LLAMA_NATIVE_DIR"),
             Path.Combine(AppContext.BaseDirectory, "native"),
+            UserDirectory,
         };
 
         var (llama, mtmd) = OperatingSystem.IsWindows() ? ("llama.dll", "mtmd.dll")

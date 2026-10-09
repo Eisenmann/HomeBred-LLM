@@ -229,6 +229,7 @@ public static class AppDbContextSchemaReconciler
                 CREATE TABLE IF NOT EXISTS "HardwareProfiles" (
                     "Id" TEXT NOT NULL PRIMARY KEY,
                     "HasGpuBackend" INTEGER NOT NULL,
+                    "ComputeMode" INTEGER NOT NULL DEFAULT 0,
                     "GpuName" TEXT NULL,
                     "BackendDevices" TEXT NULL,
                     "VramTotalBytes" INTEGER NOT NULL,
@@ -246,6 +247,11 @@ public static class AppDbContextSchemaReconciler
                     "MeasuredAt" TEXT NOT NULL
                 )
                 """);
+
+        var hwColumns = await GetColumnsAsync(db, "HardwareProfiles");
+        if (hwColumns.Count > 0 && !hwColumns.Contains("ComputeMode"))
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE \"HardwareProfiles\" ADD COLUMN \"ComputeMode\" INTEGER NOT NULL DEFAULT 0");
 
         if ((await GetColumnsAsync(db, "ExpertUsageSnapshots")).Count == 0)
             await db.Database.ExecuteSqlRawAsync(

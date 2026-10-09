@@ -38,6 +38,7 @@ public sealed class GpuMetricsService : IDisposable
     private delegate int NvmlGetUtilFunc(IntPtr device, out NvmlUtilization util);
     private delegate int NvmlGetMemFunc(IntPtr device, out NvmlMemory mem);
     private delegate int NvmlGetTempFunc(IntPtr device, int sensor, out uint temp);
+    private delegate int NvmlGetSysStrFunc(byte[] buf, uint length);
     private delegate int NvmlGetNameFunc(IntPtr device, byte[] name, uint length);
     private delegate int NvmlGetUIntFunc(IntPtr device, out uint value);
     private delegate int NvmlGetClockFunc(IntPtr device, int clockType, out uint mhz);
@@ -50,6 +51,7 @@ public sealed class GpuMetricsService : IDisposable
     private NvmlGetMemFunc?    _nvmlGetMem;
     private NvmlGetTempFunc?   _nvmlGetTemp;
     private NvmlGetNameFunc?   _nvmlGetName;
+    private NvmlGetSysStrFunc? _nvmlGetDriver;
     private NvmlGetUIntFunc?   _nvmlGetBusWidth;
     private NvmlGetClockFunc?  _nvmlGetMaxClock;
     private NvmlGetUIntFunc?   _nvmlGetPcieGen;
@@ -88,6 +90,7 @@ public sealed class GpuMetricsService : IDisposable
 
                 // Optional extras (older drivers may lack some) — used for bandwidth
                 // estimates and PCIe throughput analytics.
+                _nvmlGetDriver         = TryBind<NvmlGetSysStrFunc>(_nvmlLib, "nvmlSystemGetDriverVersion");
                 _nvmlGetName           = TryBind<NvmlGetNameFunc>(_nvmlLib, "nvmlDeviceGetName");
                 _nvmlGetBusWidth       = TryBind<NvmlGetUIntFunc>(_nvmlLib, "nvmlDeviceGetMemoryBusWidth");
                 _nvmlGetMaxClock       = TryBind<NvmlGetClockFunc>(_nvmlLib, "nvmlDeviceGetMaxClockInfo");
@@ -234,6 +237,19 @@ public sealed class GpuMetricsService : IDisposable
             }
 
             return new GpuStaticInfo(name, (long)mem.Total, (long)mem.Free, bandwidth, pcie);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>NVIDIA driver version string (e.g. "551.61"), or null when NVML is unavailable.</summary>
+    public string? GetDriverVersion()
+    {
+        if (!_nvmlInitialized || _nvmlGetDriver is null) return null;
+        try
+        {
+            var buf = new byte[80];
+            return _nvmlGetDriver(buf, (uint)buf.Length) == 0
+                ? System.Text.Encoding.ASCII.GetString(buf).TrimEnd('\0') : null;
         }
         catch { return null; }
     }

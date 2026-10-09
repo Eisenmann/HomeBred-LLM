@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using Avalonia.Media;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -13,6 +15,12 @@ using SkiaSharp;
 
 namespace HomebredLLM.ViewModels;
 
+public sealed record RequirementRowView(string Icon, IBrush IconBrush, string Title, string Detail, string? Advice, string? Url)
+{
+    public bool HasAdvice => !string.IsNullOrEmpty(Advice);
+    public bool HasUrl => !string.IsNullOrEmpty(Url);
+}
+
 public sealed record CapacityRowView(string Strategy, string MaxSize, string Speed, string Weights, string Note);
 
 /// <summary>
@@ -22,6 +30,8 @@ public sealed record CapacityRowView(string Strategy, string MaxSize, string Spe
 /// </summary>
 public partial class CalculatorViewModel(
     HardwareProbe probe,
+    GpuRequirementsChecker gpuChecker,
+    GpuBackendInstaller gpuInstaller,
     TieringCoordinator tiering,
     IDbContextFactory<AppDbContext> dbFactory) : ObservableObject
 {
@@ -35,6 +45,22 @@ public partial class CalculatorViewModel(
     [ObservableProperty] private bool _isBenchmarking;
     [ObservableProperty] private double _vramTotalGb;
     [ObservableProperty] private double _ramTotalGb;
+    /// <summary>False when llama.cpp only exposes the CPU device (e.g. LLamaSharp.Backend.Cpu), even if a GPU is physically present.</summary>
+    [ObservableProperty] private bool _hasGpuBackend;
+
+    // Compute mode (CPU / GPU switch)
+    public IReadOnlyList<string> ComputeOptions { get; } = ["CPU", "GPU"];
+    [ObservableProperty] private int _computeModeIndex;
+    [ObservableProperty] private string _gpuSummary = "";
+    [ObservableProperty] private bool _showGpuChecklist;
+    [ObservableProperty] private ObservableCollection<RequirementRowView> _gpuChecklist = [];
+    [ObservableProperty] private bool _canInstallGpu;
+    [ObservableProperty] private bool _isInstallingGpu;
+    [ObservableProperty] private double _installProgress;
+    [ObservableProperty] private string _installStatus = "";
+    [ObservableProperty] private bool _restartRequired;
+    private GpuBackendKind _gpuKind = GpuBackendKind.None;
+    private bool _loadingMode;
 
     // Inputs
     [ObservableProperty] private double _vramBudgetGb;
@@ -75,6 +101,7 @@ public partial class CalculatorViewModel(
         if (_initialized) { await RefreshModelsAsync(); return; }
         _initialized = true;
         await LoadHardwareAsync();
+        if (ComputeModeIndex == 1 && !_hw.HasGpuBackend) await RunGpuCheckAsync(); // GPU chosen but not active: tell why
         await RefreshModelsAsync();
         Schedule();
     }
@@ -83,20 +110,127 @@ public partial class CalculatorViewModel(
     {
         _hw = await probe.GetCurrentSpecAsync();
         var profile = await probe.GetProfileAsync();
+        _loadingMode = true;
+        ComputeModeIndex = profile.ComputeMode switch
+        {
+            ComputeMode.Cpu => 0,
+            ComputeMode.Gpu => 1,
+            _ => profile.HasGpuBackend ? 1 : 0,
+        };
+        _loadingMode = false;
         VramTotalGb = Math.Round(_hw.VramTotalBytes / (double)(1L << 30), 1);
         RamTotalGb = Math.Round(_hw.RamTotalBytes / (double)(1L << 30), 1);
-        if (VramBudgetGb <= 0) VramBudgetGb = Math.Max(0, Math.Round(VramTotalGb - 1, 1));
+        HasGpuBackend = _hw.HasGpuBackend;
+        // Without a GPU backend the VRAM can't be used, so don't offer a budget for it.
+        if (!HasGpuBackend) VramBudgetGb = 0;
+        else if (VramBudgetGb <= 0) VramBudgetGb = Math.Max(0, Math.Round(VramTotalGb - 1, 1));
         if (RamBudgetGb <= 0) RamBudgetGb = Math.Max(1, Math.Round(Math.Min(RamTotalGb - 4, RamTotalGb * 0.8)));
 
         var gpu = _hw.HasGpuBackend
             ? $"{_hw.GpuName ?? "GPU"} · {VramTotalGb:F1} GB @ {_hw.VramBandwidthGBs:F0} GB/s"
-            : $"No GPU device in llama.cpp backend ({profile.BackendDevices})";
+            : _hw.GpuDisabledByUser
+                ? $"{_hw.GpuName ?? "GPU"} ({VramTotalGb:F1} GB VRAM) — GPU mode is off, running on CPU."
+            : _hw.VramTotalBytes > 0
+                ? $"{_hw.GpuName ?? "GPU"} ({VramTotalGb:F1} GB VRAM) detected, but not usable: this build's llama.cpp backend is CPU-only " +
+                  $"(devices: {profile.BackendDevices}). Switch Compute to GPU above to see what to install."
+                : $"No GPU device in llama.cpp backend ({profile.BackendDevices})";
         var disk = profile.DiskSequentialMBs > 0
             ? $"disk {profile.DiskSequentialMBs:F0} MB/s seq, {profile.DiskLatencyMs:F2} ms latency{(_hw.DiskLooksRotational ? " (HDD-like)" : "")}"
             : "disk not benchmarked yet";
         if (_hw.HasExpertCache) gpu += " · per-expert VRAM cache available";
         HardwareSummary = $"{gpu}\nRAM {RamTotalGb:F0} GB @ {_hw.RamBandwidthGBs:F0} GB/s · {_hw.CpuCores} threads · {disk}" +
                           $"\nMeasured {profile.MeasuredAt.ToLocalTime():g} · speed calibration ×{profile.SpeedCalibration:F2}";
+    }
+
+    partial void OnComputeModeIndexChanged(int value)
+    {
+        if (_loadingMode) return;
+        _ = ApplyComputeModeAsync(value == 1 ? ComputeMode.Gpu : ComputeMode.Cpu);
+    }
+
+    private async Task ApplyComputeModeAsync(ComputeMode mode)
+    {
+        await probe.SetComputeModeAsync(mode);
+        if (mode == ComputeMode.Gpu) await RunGpuCheckAsync();
+        else { ShowGpuChecklist = false; GpuSummary = "CPU mode: models run on CPU + RAM (+ disk); the GPU is not used."; }
+        await LoadHardwareAsync();
+        Schedule();
+    }
+
+    [RelayCommand]
+    private async Task RecheckGpuAsync()
+    {
+        await RunGpuCheckAsync();
+        await LoadHardwareAsync();
+        Schedule();
+    }
+
+    private async Task RunGpuCheckAsync()
+    {
+        var report = await Task.Run(gpuChecker.Check);
+        GpuSummary = report.Summary;
+        GpuChecklist = new ObservableCollection<RequirementRowView>(report.Items.Select(i => new RequirementRowView(
+            i.Status switch { CheckStatus.Ok => "✔", CheckStatus.Warning => "⚠", CheckStatus.Missing => "✖", _ => "ℹ" },
+            i.Status switch
+            {
+                CheckStatus.Ok => Brushes.LimeGreen,
+                CheckStatus.Warning => Brushes.Orange,
+                CheckStatus.Missing => Brushes.IndianRed,
+                _ => Brushes.SteelBlue,
+            },
+            i.Title, i.Detail, i.Advice, i.Url)));
+        ShowGpuChecklist = !report.Ready;
+        _gpuKind = report.Kind;
+        RestartRequired = report.RestartRequired;
+        // Offer the one-click setup when something installable is missing.
+        CanInstallGpu = !report.Ready && !report.RestartRequired && GpuBackendInstaller.CanInstall(report.Kind) &&
+                        report.Items.Any(i => i.Status == CheckStatus.Missing &&
+                                              (i.Title.StartsWith("llama.cpp") || i.Title.StartsWith("CUDA")));
+        if (!report.Ready && !GpuBackendInstaller.CanInstall(report.Kind) && report.Kind != GpuBackendKind.None)
+            InstallStatus = GpuBackendInstaller.Unsupported(report.Kind);
+    }
+
+    [RelayCommand]
+    private async Task InstallGpuAsync()
+    {
+        if (IsInstallingGpu) return;
+        IsInstallingGpu = true;
+        InstallProgress = 0;
+        try
+        {
+            var dir = GpuRequirementsChecker.TargetDirectory;
+            await gpuInstaller.InstallAsync(_gpuKind, dir,
+                new Progress<string>(s => InstallStatus = s),
+                new Progress<double>(p => InstallProgress = p));
+            await RunGpuCheckAsync();
+            await LoadHardwareAsync();
+            Schedule();
+        }
+        catch (Exception ex)
+        {
+            InstallStatus = $"Setup failed: {ex.Message}";
+        }
+        finally { IsInstallingGpu = false; }
+    }
+
+    [RelayCommand]
+    private static void RestartApp()
+    {
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (exe is not null) Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true });
+        }
+        catch { /* user can restart manually */ }
+        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime d)
+            d.Shutdown();
+    }
+
+    [RelayCommand]
+    private static void OpenUrl(string? url)
+    {
+        if (string.IsNullOrEmpty(url) || !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return;
+        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch { /* no browser */ }
     }
 
     public async Task RefreshModelsAsync()

@@ -126,6 +126,9 @@ public sealed class LlamaCppInferenceService : IInferenceService, IDisposable
             progress?.Report($"Tier planning skipped ({ex.Message}); using GPU layer count.");
         }
 
+        // CPU mode: never offload, even when a GPU backend is loaded (Simple mode / planner fallback).
+        var forceCpu = _hardware is not null && await _hardware.IsGpuDisabledAsync();
+
         progress?.Report("Loading GGUF model...");
 
         // Clear prior capture so the lines we read on failure belong to *this*
@@ -138,7 +141,7 @@ public sealed class LlamaCppInferenceService : IInferenceService, IDisposable
             var parameters = new ModelParams(modelPath)
             {
                 ContextSize = (uint)Math.Max(512, config.ContextSize),
-                GpuLayerCount = config.GpuLayerCount,
+                GpuLayerCount = forceCpu ? 0 : config.GpuLayerCount,
                 Threads = config.ThreadCount > 0 ? config.ThreadCount : null,
                 BatchSize = (uint)Math.Max(1, config.BatchSize),
             };
