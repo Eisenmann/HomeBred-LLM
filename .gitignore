@@ -33,3 +33,30 @@ Thumbs.db
 *.gguf
 *.bin
 *.ggml
+
+# Publish / CI packaging output
+publish/
+*.tar.gz
+*.zip
+TestResults/
+
+# Avalonia build-task cache
+.avalonia-build-tasks/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Local app data (SQLite databases created at runtime)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# Large model files (keep outside the repo)
+*.onnx
+*.onnx_data
+*.safetensors
+
+# AI-agent scratch files
+task_progress.md

@@ -18,8 +18,12 @@
          The DirectML package provides GPU acceleration on Windows via DirectX 12.
          Models are loaded from a directory containing model.onnx, config.json,
          and tokenizer files (produced by HuggingFace's optimum-export pipeline). -->
-    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" Version="0.14.1" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI.DirectML" Version="0.14.1" />
+    <!-- The two packages ship identical win-x64 native DLLs, so referencing both
+         breaks publish (NETSDK1152). Use DirectML on Windows, base package elsewhere. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" Version="0.14.1"
+                      Condition="!$([MSBuild]::IsOSPlatform('Windows'))" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI.DirectML" Version="0.14.1"
+                      Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
 
     <!-- GGUF inference (v2/v3) — LLamaSharp is the managed binding to llama.cpp.
          It needs exactly one native backend package alongside it, matching the
@@ -69,5 +73,24 @@
     <!-- Windows PerformanceCounter (guarded by RuntimeInformation, needed for net8.0 TFM) -->
     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="8.0.0" />
   </ItemGroup>
+
+  <!-- The ONNX packages' props files add None+CopyToOutputDirectory items for their
+       Windows natives (onnxruntime-genai.dll, onnxruntime.dll,
+       onnxruntime_providers_shared.dll) with conditions based only on PlatformTarget,
+       so on Linux/macOS builds those Windows DLLs get copied to the output root.
+       They are never used at runtime there (the Linux natives come from
+       runtimes/linux-x64/native), so strip them on non-Windows builds.
+       Must run before AssignTargetPaths so neither build nor publish copies them. -->
+  <Target Name="StripWindowsOnnxCopyItemsOnNonWindows"
+          BeforeTargets="AssignTargetPaths"
+          Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <ItemGroup>
+      <_WindowsOnnxNoneCopies Include="@(None)"
+           Condition="$([System.String]::Copy('%(None.Link)').ToLowerInvariant().EndsWith('onnxruntime-genai.dll')) or
+                      $([System.String]::Copy('%(None.Link)').ToLowerInvariant().EndsWith('onnxruntime.dll')) or
+                      $([System.String]::Copy('%(None.Link)').ToLowerInvariant().EndsWith('onnxruntime_providers_shared.dll'))" />
+      <None Remove="@(_WindowsOnnxNoneCopies)" />
+    </ItemGroup>
+  </Target>
 
 </Project>
