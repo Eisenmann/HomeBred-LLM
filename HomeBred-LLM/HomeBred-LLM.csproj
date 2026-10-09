@@ -74,6 +74,10 @@
     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="8.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="TieringVerificationTests" />
+  </ItemGroup>
+
   <!-- The ONNX packages' props files add None+CopyToOutputDirectory items for their
        Windows natives (onnxruntime-genai.dll, onnxruntime.dll,
        onnxruntime_providers_shared.dll) with conditions based only on PlatformTarget,

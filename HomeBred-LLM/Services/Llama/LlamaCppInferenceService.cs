@@ -3,7 +3,10 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using HomebredLLM.Models;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using HomebredLLM.Services.Gguf;
+using HomebredLLM.Services.Tiering;
 using LLama;
 using LLama.Common;
 using LLama.Sampling;
@@ -61,6 +64,23 @@ public sealed class LlamaCppInferenceService : IInferenceService, IDisposable
     /// </summary>
     private readonly NativeLogBuffer _nativeLogBuffer;
 
+    /// <summary>
+    /// Tiered memory (docs/tiered-memory-architecture.md): plans VRAM/RAM/disk
+    /// placement before load, then runs the warm tier, routing profiler and
+    /// rebalancer for the loaded model.
+    /// </summary>
+    private readonly TieringCoordinator? _tiering;
+
+    private readonly HardwareProbe? _hardware;
+
+    public LlamaCppInferenceService(NativeLogBuffer nativeLogBuffer, TieringCoordinator tiering, HardwareProbe hardware)
+    {
+        _nativeLogBuffer = nativeLogBuffer;
+        _tiering = tiering;
+        _hardware = hardware;
+    }
+
+    /// <summary>Without tiering (legacy GPU-layer placement only) — used by tests and tools.</summary>
     public LlamaCppInferenceService(NativeLogBuffer nativeLogBuffer)
     {
         _nativeLogBuffer = nativeLogBuffer;
@@ -90,6 +110,22 @@ public sealed class LlamaCppInferenceService : IInferenceService, IDisposable
         progress?.Report("Validating attention dimensions...");
         ValidateAttentionDimensions(modelPath);
 
+        PreparedLoad? tiered = null;
+        try
+        {
+            if (_tiering is not null)
+                tiered = await _tiering.PrepareAsync(modelId, modelPath, config, progress);
+        }
+        catch (InvalidOperationException)
+        {
+            throw; // "does not fit the budgets" — the user has to change settings
+        }
+        catch (Exception ex)
+        {
+            // Planning is an optimisation; never let it block a load that would work the legacy way.
+            progress?.Report($"Tier planning skipped ({ex.Message}); using GPU layer count.");
+        }
+
         progress?.Report("Loading GGUF model...");
 
         // Clear prior capture so the lines we read on failure belong to *this*
@@ -106,6 +142,9 @@ public sealed class LlamaCppInferenceService : IInferenceService, IDisposable
                 Threads = config.ThreadCount > 0 ? config.ThreadCount : null,
                 BatchSize = (uint)Math.Max(1, config.BatchSize),
             };
+
+            if (tiered is not null)
+                LlamaPlacementApplier.Apply(parameters, tiered.Plan);
 
             if (loraAdapters is { Count: > 0 })
             {
@@ -128,8 +167,16 @@ public sealed class LlamaCppInferenceService : IInferenceService, IDisposable
                 var context = weights.CreateContext(parameters);
                 var executor = new InteractiveExecutor(context);
 
-                _loaded[modelId] = new LoadedModel { Weights = weights, Context = context, Executor = executor };
+                var loadedModel = new LoadedModel { Weights = weights, Context = context, Executor = executor };
+                _loaded[modelId] = loadedModel;
                 _vision[modelId] = !string.IsNullOrWhiteSpace(mmprojPath) && File.Exists(mmprojPath);
+
+                if (tiered is not null && _tiering is not null)
+                {
+                    CalibrateComputeBuffer(tiered.Plan);
+                    _tiering.OnLoaded(modelId, tiered, weights, parameters,
+                        action => RunExclusiveAsync(loadedModel, action));
+                }
 
                 progress?.Report("Model loaded.");
             }
@@ -147,8 +194,38 @@ public sealed class LlamaCppInferenceService : IInferenceService, IDisposable
         });
     }
 
+    /// <summary>Runs background work (routing profiling) only while no chat is generating.</summary>
+    private static async Task RunExclusiveAsync(LoadedModel model, Func<Task> action)
+    {
+        await model.ChatLock.WaitAsync();
+        try { await action(); }
+        finally { model.ChatLock.Release(); }
+    }
+
+    private static readonly Regex ComputeBufferLine = new(
+        @"(\S+) compute buffer size =\s*([0-9.]+) MiB", RegexOptions.Compiled);
+
+    /// <summary>Compares llama.cpp's reported GPU compute buffers with the estimate to calibrate future plans.</summary>
+    private void CalibrateComputeBuffer(PlacementPlan plan)
+    {
+        if (!plan.UsesGpu || plan.VramComputeBytes <= 0) return;
+        double gpuMiB = 0;
+        foreach (var line in _nativeLogBuffer.RecentLines())
+        {
+            var m = ComputeBufferLine.Match(line);
+            if (!m.Success) continue;
+            var device = m.Groups[1].Value;
+            if (device.StartsWith("CPU", StringComparison.OrdinalIgnoreCase) ||
+                device.EndsWith("_Host", StringComparison.OrdinalIgnoreCase)) continue;
+            gpuMiB += double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+        }
+        if (gpuMiB > 0 && _hardware is not null)
+            _ = _hardware.RecordComputeBufferSampleAsync(gpuMiB * (1 << 20) / plan.VramComputeBytes);
+    }
+
     public void Unload(Guid modelId)
     {
+        _tiering?.OnUnloaded(modelId); // profiler context must go before the weights it uses
         if (_loaded.TryRemove(modelId, out var m))
             m.Dispose();
         _vision.TryRemove(modelId, out _);
@@ -193,6 +270,8 @@ public sealed class LlamaCppInferenceService : IInferenceService, IDisposable
             float? ttft = null;
             var outputTokens = 0;
             var promptTokens = loaded.Context.Tokenize(prompt, addBos: true).Length;
+            var completion = new StringBuilder();
+            _tiering?.NotifyActivity(request.ModelId);
 
             await foreach (var text in loaded.Executor.InferAsync(prompt, inferenceParams, ct))
             {
@@ -200,13 +279,16 @@ public sealed class LlamaCppInferenceService : IInferenceService, IDisposable
                 if (string.IsNullOrEmpty(text)) continue;
                 if (ttft is null) ttft = (float)sw.Elapsed.TotalMilliseconds;
                 outputTokens++;
+                completion.Append(text);
                 yield return text;
             }
 
             sw.Stop();
             var totalMs = (float)sw.Elapsed.TotalMilliseconds;
             var tps = totalMs > 0 ? outputTokens / (totalMs / 1000f) : 0;
-            onDone(new InferenceStats(tps, ttft ?? 0, totalMs, promptTokens, outputTokens));
+            var stats = new InferenceStats(tps, ttft ?? 0, totalMs, promptTokens, outputTokens);
+            _tiering?.OnChatCompleted(request.ModelId, prompt + completion, stats);
+            onDone(stats);
         }
         finally
         {

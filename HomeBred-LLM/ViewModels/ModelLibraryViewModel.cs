@@ -5,10 +5,20 @@ using CommunityToolkit.Mvvm.Messaging;
 using HomebredLLM.Data;
 using HomebredLLM.Models;
 using HomebredLLM.Services;
+using HomebredLLM.Services.Tiering;
 using Microsoft.EntityFrameworkCore;
 using System.Collections.ObjectModel;
 
 namespace HomebredLLM.ViewModels;
+
+/// <summary>A Hugging Face file row with its hardware-fit badge.</summary>
+public sealed record HfFileRow(HfFileInfo File, string? FitLabel, string FitColor, string? FitDetail)
+{
+    public string Filename => File.Filename;
+    public long? SizeBytes => File.SizeBytes;
+    public string? Quantization => File.Quantization;
+    public bool HasFit => FitLabel is not null;
+}
 
 public partial class ModelLibraryViewModel(
     IDbContextFactory<AppDbContext> dbFactory,
@@ -16,7 +26,9 @@ public partial class ModelLibraryViewModel(
     HuggingFaceService hf,
     MetricsCollectorService metricsCollector,
     ModelApiServerService apiServer,
-    LocalModelImportService localImport) : ObservableObject
+    LocalModelImportService localImport,
+    TieringCoordinator tiering,
+    HardwareProbe hardware) : ObservableObject
 {
     // ── Local models ────────────────────────────────────────────────────────
     [ObservableProperty] private ObservableCollection<LocalModel> _localModels = [];
@@ -33,7 +45,7 @@ public partial class ModelLibraryViewModel(
     [ObservableProperty] private string _hfSearchQuery = "";
     [ObservableProperty] private ObservableCollection<HfModelInfo> _hfResults = [];
     [ObservableProperty] private HfModelInfo? _selectedHfModel;
-    [ObservableProperty] private ObservableCollection<HfFileInfo> _hfFiles = [];
+    [ObservableProperty] private ObservableCollection<HfFileRow> _hfFiles = [];
     [ObservableProperty] private bool _isSearching;
     [ObservableProperty] private bool _isDownloading;
     [ObservableProperty] private double _downloadProgress;
@@ -46,6 +58,69 @@ public partial class ModelLibraryViewModel(
         await using var db = await dbFactory.CreateDbContextAsync();
         var models = await db.Models.Include(m => m.Config).OrderByDescending(m => m.CreatedAt).ToListAsync();
         LocalModels = new ObservableCollection<LocalModel>(models);
+        _ = RefreshFitBadgesAsync();
+    }
+
+    /// <summary>
+    /// Computes the "fits on GPU / with RAM / needs disk / too large" badge for
+    /// every local GGUF model under its own memory settings (same planner as
+    /// loading). Runs in the background; rows update as results arrive.
+    /// </summary>
+    public async Task RefreshFitBadgesAsync()
+    {
+        var models = LocalModels.Where(m => m.Format == ModelFormat.Gguf && m.LocalPath is not null).ToList();
+        foreach (var model in models)
+        {
+            try
+            {
+                var report = await Task.Run(async () =>
+                {
+                    var cfg = model.Config ?? new ModelConfiguration { ModelId = model.Id };
+                    var mem = await tiering.GetOrCreateMemoryProfileAsync(model.Id);
+                    return await tiering.PreviewAsync(model, cfg, mem);
+                });
+                if (report is null) continue;
+                model.FitLabel = $"{report.VerdictLabel} · ~{report.Plan.Estimate.TokensPerSecond:0.#} tok/s";
+                model.FitColor = TierBreakdownViewModel.VerdictColorOf(report.Verdict);
+                model.FitDetail = string.Join("\n", new[]
+                {
+                    $"VRAM {TierBreakdownViewModel.Gb(report.Plan.VramTotalBytes)} · RAM {TierBreakdownViewModel.Gb(report.Plan.RamTotalBytes)} · disk {TierBreakdownViewModel.Gb(report.Plan.ColdBytes)}",
+                }.Concat(report.Suggestions));
+                UpdateModelInList(model);
+            }
+            catch
+            {
+                // A badge is optional — never break the library over it.
+            }
+        }
+    }
+
+    private async Task<IEnumerable<HfFileRow>> WithFitAsync(IEnumerable<HfFileInfo> files)
+    {
+        HardwareSpec hw;
+        try { hw = await hardware.GetCurrentSpecAsync(); }
+        catch { return files.Select(f => new HfFileRow(f, null, "#6B7280", null)); }
+
+        var budget = new TierBudget
+        {
+            VramBytes = Math.Max(0, hw.VramFreeBytes - (768L << 20)),
+            RamBytes = Math.Max(1L << 30, hw.RamAvailableBytes - (4L << 30)),
+        };
+        var settings = new RuntimeSettings { ContextSize = 4096 };
+        return files.Select(f =>
+        {
+            // HF listings here are ONNX exports (loaded fully onto the device by ONNX Runtime GenAI),
+            // so only "fits in VRAM" is meaningful for them.
+            var r = f.SizeBytes is > 0
+                ? CapacityCalculator.AssessFile(f.SizeBytes.Value, f.Quantization, f.Filename, settings, budget, hw)
+                : null;
+            if (r is null) return new HfFileRow(f, null, "#6B7280", null);
+            var fitsGpu = r.Verdict == FitVerdict.FitsGpu;
+            return new HfFileRow(f,
+                fitsGpu ? "Fits GPU" : hw.HasGpuBackend ? "Exceeds VRAM" : "CPU only",
+                fitsGpu ? "#10B981" : "#F59E0B",
+                $"~{r.Plan.Catalog.Shape.TotalParameters / 1e9:0.#}B params · needs {TierBreakdownViewModel.Gb(r.Plan.VramTotalBytes + r.Plan.CpuWeightBytes)} at 4k context");
+        });
     }
 
     /// <summary>Imports a locally-picked ONNX model directory and adds it to the library.</summary>
@@ -60,6 +135,7 @@ public partial class ModelLibraryViewModel(
         try
         {
             var model = await localImport.ImportAsync(sourcePath);
+            _ = Task.Delay(500).ContinueWith(_ => RefreshFitBadgesAsync());
 
             if (Dispatcher.UIThread.CheckAccess())
             {
@@ -117,7 +193,7 @@ public partial class ModelLibraryViewModel(
     private async Task SelectHfModelAsync(HfModelInfo model)
     {
         var files = await hf.ListOnnxFilesAsync(model.RepoId);
-        HfFiles = new ObservableCollection<HfFileInfo>(files);
+        HfFiles = new ObservableCollection<HfFileRow>(await WithFitAsync(files));
     }
 
     [RelayCommand]

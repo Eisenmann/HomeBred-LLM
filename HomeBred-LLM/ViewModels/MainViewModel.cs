@@ -14,6 +14,7 @@ public partial class MainViewModel : ObservableObject
     private readonly ChatViewModel         _chatVm;
     private readonly AnalyticsViewModel    _analyticsVm;
     private readonly ModelConfigViewModel  _configVm;
+    private readonly CalculatorViewModel   _calculatorVm;
 
     [ObservableProperty] private object _currentView = null!;
     [ObservableProperty] private string _statusMessage = "Ready";
@@ -22,8 +23,10 @@ public partial class MainViewModel : ObservableObject
         ModelLibraryViewModel library,
         ChatViewModel         chat,
         AnalyticsViewModel    analytics,
-        ModelConfigViewModel  config)
+        ModelConfigViewModel  config,
+        CalculatorViewModel   calculator)
     {
+        _calculatorVm = calculator;
         _libraryVm   = library;
         _chatVm      = chat;
         _analyticsVm = analytics;
@@ -42,12 +45,14 @@ public partial class MainViewModel : ObservableObject
     private async Task NavigateToAsync(string page)
     {
         if (page == "Chat") await _chatVm.RefreshRunningModelsAsync();
+        if (page == "Calculator") await _calculatorVm.InitializeAsync();
 
         CurrentView = page switch
         {
             "Chat"      => (object)_chatVm,
             "Analytics" => _analyticsVm,
             "Config"    => _configVm,
+            "Calculator" => _calculatorVm,
             _           => _libraryVm,
         };
     }

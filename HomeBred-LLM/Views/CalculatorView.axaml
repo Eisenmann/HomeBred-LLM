@@ -1,0 +1,150 @@
+<UserControl x:Class="HomebredLLM.Views.CalculatorView"
+             xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="using:HomebredLLM.Views"
+             xmlns:vm="using:HomebredLLM.ViewModels"
+             xmlns:lvc="using:LiveChartsCore.SkiaSharpView.Avalonia">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="24">
+            <TextBlock Text="Capacity Calculator" Classes="section-header" />
+            <TextBlock Classes="muted" TextWrapping="Wrap" Margin="0,-6,0,14"
+                       Text="How large a model can this machine run with these budgets and settings — and how fast. Uses the same planner as model loading." />
+
+            <!-- Hardware -->
+            <Border Classes="card" Margin="0,0,0,12">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Hardware" Classes="label" />
+                        <TextBlock Text="{Binding HardwareSummary}" TextWrapping="Wrap" FontSize="12" />
+                        <TextBlock Text="{Binding BenchmarkStatus}" Classes="muted" Margin="0,4,0,0" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="⏱ Run benchmark" Classes="ghost" VerticalAlignment="Top"
+                            Command="{Binding RunBenchmarkCommand}" IsEnabled="{Binding !IsBenchmarking}"
+                            ToolTip.Tip="Measures RAM bandwidth and the read speed of the drive your models are on (≈ 10–30 s)." />
+                </Grid>
+            </Border>
+
+            <Grid ColumnDefinitions="320,*">
+                <!-- Inputs -->
+                <Border Grid.Column="0" Classes="card" Margin="0,0,12,0" VerticalAlignment="Top">
+                    <StackPanel>
+                        <TextBlock Text="VRAM budget (GB)" Classes="label" />
+                        <Grid ColumnDefinitions="*,64" Margin="0,0,0,10">
+                            <Slider Minimum="0" Maximum="{Binding VramTotalGb}" Value="{Binding VramBudgetGb}" TickFrequency="0.5"
+                                    IsSnapToTickEnabled="True" Margin="0,0,8,0" />
+                            <TextBox Grid.Column="1" Text="{Binding VramBudgetGb}" />
+                        </Grid>
+                        <TextBlock Text="RAM budget (GB)" Classes="label" />
+                        <Grid ColumnDefinitions="*,64" Margin="0,0,0,10">
+                            <Slider Minimum="0" Maximum="{Binding RamTotalGb}" Value="{Binding RamBudgetGb}" TickFrequency="1"
+                                    IsSnapToTickEnabled="True" Margin="0,0,8,0" />
+                            <TextBox Grid.Column="1" Text="{Binding RamBudgetGb}" />
+                        </Grid>
+
+                        <TextBlock Text="Quantization" Classes="label" />
+                        <ComboBox ItemsSource="{Binding QuantOptions}" SelectedItem="{Binding Quantization}"
+                                  HorizontalAlignment="Stretch" Margin="0,0,0,10" />
+
+                        <Grid ColumnDefinitions="*,8,*" Margin="0,0,0,10">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Context (tokens)" Classes="label" />
+                                <TextBox Text="{Binding ContextSize}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Parallel sequences" Classes="label" />
+                                <TextBox Text="{Binding ParallelSequences}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid ColumnDefinitions="*,8,*" Margin="0,0,0,10">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="KV cache type" Classes="label" />
+                                <ComboBox ItemsSource="{Binding KvOptions}" SelectedItem="{Binding KvType}" HorizontalAlignment="Stretch" />
+                            </StackPanel>
+                            <CheckBox Grid.Column="2" Content="Flash attention" IsChecked="{Binding FlashAttention}"
+                                      VerticalAlignment="Bottom" />
+                        </Grid>
+
+                        <TextBlock Text="Model type" Classes="label" />
+                        <ComboBox ItemsSource="{Binding KindOptions}" SelectedItem="{Binding ModelKind}"
+                                  HorizontalAlignment="Stretch" Margin="0,0,0,10" />
+                        <Grid ColumnDefinitions="*,8,*,8,*" Margin="0,0,0,10" IsVisible="{Binding IsMoe}">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Active %" Classes="label" />
+                                <TextBox Text="{Binding MoeActivePercent}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Experts" Classes="label" />
+                                <TextBox Text="{Binding ExpertCount}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="4">
+                                <TextBlock Text="Used / token" Classes="label" />
+                                <TextBox Text="{Binding ExpertsUsed}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="Minimum speed (tok/s, 0 = any)" Classes="label" />
+                        <TextBox Text="{Binding MinTokensPerSecond}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Results -->
+                <StackPanel Grid.Column="1">
+                    <Border Classes="card" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="Largest model per strategy" Classes="label" Margin="0,0,0,8" />
+                            <Grid ColumnDefinitions="140,90,90,80,*" Margin="0,0,0,4">
+                                <TextBlock Grid.Column="0" Text="Strategy" Classes="muted" />
+                                <TextBlock Grid.Column="1" Text="Max size" Classes="muted" />
+                                <TextBlock Grid.Column="2" Text="Speed" Classes="muted" />
+                                <TextBlock Grid.Column="3" Text="Weights" Classes="muted" />
+                                <TextBlock Grid.Column="4" Text="Notes" Classes="muted" />
+                            </Grid>
+                            <ItemsControl ItemsSource="{Binding Rows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="0,6">
+                                            <Grid ColumnDefinitions="140,90,90,80,*">
+                                                <TextBlock Grid.Column="0" Text="{Binding Strategy}" FontWeight="SemiBold" />
+                                                <TextBlock Grid.Column="1" Text="{Binding MaxSize}" FontWeight="Bold"
+                                                           Foreground="{StaticResource AccentBrush}" />
+                                                <TextBlock Grid.Column="2" Text="{Binding Speed}" Foreground="{StaticResource SuccessBrush}" />
+                                                <TextBlock Grid.Column="3" Text="{Binding Weights}" />
+                                                <TextBlock Grid.Column="4" Text="{Binding Note}" Classes="muted" TextWrapping="Wrap" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="Estimated speed by model size (log scale, missing point = doesn't fit)" Classes="label" Margin="0,0,0,8" />
+                            <lvc:CartesianChart Series="{Binding SpeedSeries}" XAxes="{Binding SizeAxis}" YAxes="{Binding SpeedAxis}"
+                                                LegendPosition="Top" LegendTextPaint="{x:Static vm:ChartTheme.LegendPaint}" Height="220" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card">
+                        <StackPanel>
+                            <TextBlock Text="Can I run this?" Classes="label" />
+                            <ComboBox ItemsSource="{Binding LocalModels}" SelectedItem="{Binding SelectedModel}"
+                                      DisplayMemberBinding="{Binding Name}" MinWidth="280" Margin="0,0,0,10" />
+                            <TextBlock Text="{Binding ModelFitStatus}" Foreground="{StaticResource WarningBrush}" TextWrapping="Wrap" />
+                            <ContentControl Content="{Binding ModelFit}">
+                                <ContentControl.ContentTemplate>
+                                    <DataTemplate>
+                                        <views:TierBreakdownView />
+                                    </DataTemplate>
+                                </ContentControl.ContentTemplate>
+                            </ContentControl>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

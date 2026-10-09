@@ -1,6 +1,7 @@
 <UserControl x:Class="HomebredLLM.Views.ModelConfigView"
              xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="using:HomebredLLM.Views">
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="24" MaxWidth="680">
@@ -149,22 +150,111 @@
                                TextWrapping="Wrap"
                                Margin="0,0,0,16" />
 
-                    <!-- Buttons -->
-                    <StackPanel Orientation="Horizontal">
-                        <Button Content="💾 Save"
-                                Classes="accent"
-                                Command="{Binding SaveCommand}"
-                                Margin="0,0,8,0" />
-                        <Button Content="↺ Reset Defaults"
-                                Classes="ghost"
-                                Command="{Binding ResetDefaultsCommand}" />
-                        <TextBlock Text="{Binding SaveStatus}"
-                                   Foreground="{StaticResource SuccessBrush}"
-                                   VerticalAlignment="Center"
-                                   Margin="12,0,0,0" />
+
+                </StackPanel>
+            </Border>
+            <!-- ── Memory tiers (GGUF) ─────────────────────────────────── -->
+            <Border Classes="card" Margin="0,12,0,0" IsVisible="{Binding IsGguf}">
+                <StackPanel>
+                    <TextBlock Text="Memory tiers" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,2" />
+                    <TextBlock Classes="muted" TextWrapping="Wrap" Margin="0,0,0,10"
+                               Text="Places weights across VRAM, RAM and disk within these budgets. For MoE models the RAM tier keeps the experts routing actually uses. VRAM changes apply at the next start; the RAM tier re-targets live." />
+                    <TextBlock Text="{Binding HardwareNote}" Classes="muted" TextWrapping="Wrap" Margin="0,0,0,10" />
+
+                    <CheckBox Content="Tiered placement (off = use GPU Layer Count only)"
+                              IsChecked="{Binding TieredMode}" Margin="0,0,0,10" />
+
+                    <StackPanel IsVisible="{Binding TieredMode}">
+                        <Grid ColumnDefinitions="Auto,*,64" Margin="0,0,0,8">
+                            <CheckBox Grid.Column="0" Content="Auto VRAM" IsChecked="{Binding AutoVram}" Width="110" />
+                            <Slider Grid.Column="1" Minimum="0" Maximum="{Binding VramTotalGb}" Value="{Binding VramBudgetGb}"
+                                    TickFrequency="0.5" IsSnapToTickEnabled="True" IsEnabled="{Binding !AutoVram}" Margin="0,0,8,0" />
+                            <TextBox Grid.Column="2" Text="{Binding VramBudgetGb}" IsEnabled="{Binding !AutoVram}" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,*,64" Margin="0,0,0,10">
+                            <CheckBox Grid.Column="0" Content="Auto RAM" IsChecked="{Binding AutoRam}" Width="110" />
+                            <Slider Grid.Column="1" Minimum="0" Maximum="{Binding RamTotalGb}" Value="{Binding RamBudgetGb}"
+                                    TickFrequency="1" IsSnapToTickEnabled="True" IsEnabled="{Binding !AutoRam}" Margin="0,0,8,0" />
+                            <TextBox Grid.Column="2" Text="{Binding RamBudgetGb}" IsEnabled="{Binding !AutoRam}" />
+                        </Grid>
+                        <TextBlock Classes="muted" Margin="0,-6,0,10" Text="Budgets in GB. Auto = free VRAM − 0.75 GB, available RAM − 4 GB." />
+
+                        <WrapPanel Margin="0,0,0,10">
+                            <CheckBox Content="Allow disk tier" IsChecked="{Binding AllowDiskTier}" Margin="0,0,16,0"
+                                      ToolTip.Tip="Weights that fit neither VRAM nor the RAM budget stay memory-mapped and are read from disk on demand." />
+                            <CheckBox Content="Lock warm tier in RAM" IsChecked="{Binding LockWarmTier}" Margin="0,0,16,0"
+                                      ToolTip.Tip="Pins warm-tier pages (mlock / VirtualLock) so memory pressure can't evict them. May need a higher memlock limit." />
+                            <CheckBox Content="KV cache on GPU" IsChecked="{Binding KvOnGpu}" Margin="0,0,16,0" />
+                            <CheckBox Content="Flash attention" IsChecked="{Binding FlashAttention}" />
+                        </WrapPanel>
+
+                        <Grid ColumnDefinitions="*,12,*" Margin="0,0,0,10">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="KV cache type" Classes="label" />
+                                <ComboBox ItemsSource="{Binding KvOptions}" SelectedItem="{Binding KvCacheType}" HorizontalAlignment="Stretch" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Warm-tier rebalancing" Classes="label" />
+                                <ComboBox ItemsSource="{Binding RebalanceOptions}" SelectedItem="{Binding RebalancePolicy}" HorizontalAlignment="Stretch" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid ColumnDefinitions="Auto,*,12,*" Margin="0,0,0,12">
+                            <CheckBox Grid.Column="0" Content="Learn expert routing (MoE)" IsChecked="{Binding RoutingProfilerEnabled}"
+                                      VerticalAlignment="Bottom" Margin="0,0,12,0"
+                                      ToolTip.Tip="While idle, replays recent chat tokens through a side context and records which experts the router picks." />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Profiler window (tokens)" Classes="label" />
+                                <TextBox Text="{Binding ProfilerWindowTokens}" IsEnabled="{Binding RoutingProfilerEnabled}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="3">
+                                <TextBlock Text="Rebalance threshold (% hit-rate gain)" Classes="label" />
+                                <TextBox Text="{Binding RebalanceThresholdPct}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
+                            <StackPanel>
+                                <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,6">
+                                    <TextBlock Text="Plan preview (uses the context/batch settings above)" Classes="label" VerticalAlignment="Center" />
+                                    <Button Grid.Column="1" Content="↻ Recalculate" Classes="ghost" Padding="8,3"
+                                            Command="{Binding RefreshPreviewCommand}" />
+                                </Grid>
+                                <ContentControl Content="{Binding TierPreview}">
+                                <ContentControl.ContentTemplate>
+                                    <DataTemplate>
+                                        <views:TierBreakdownView />
+                                    </DataTemplate>
+                                </ContentControl.ContentTemplate>
+                            </ContentControl>
+                                <TextBlock Text="{Binding TierStatus}" Classes="muted" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <TextBlock Text="{Binding RuntimeStatus}" Classes="muted" TextWrapping="Wrap" Margin="0,10,0,0" />
+                    <StackPanel Orientation="Horizontal" IsVisible="{Binding HasRebalanceSuggestion}" Margin="0,6,0,0">
+                        <TextBlock Text="{Binding RebalanceSuggestion}" Foreground="{StaticResource WarningBrush}"
+                                   TextWrapping="Wrap" VerticalAlignment="Center" MaxWidth="480" />
+                        <Button Content="Apply" Classes="accent" Padding="10,4" Margin="10,0,0,0"
+                                Command="{Binding ApplyRebalanceCommand}" />
                     </StackPanel>
                 </StackPanel>
             </Border>
+            <!-- Buttons -->
+            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                <Button Content="💾 Save"
+                        Classes="accent"
+                        Command="{Binding SaveCommand}"
+                        Margin="0,0,8,0" />
+                <Button Content="↺ Reset Defaults"
+                        Classes="ghost"
+                        Command="{Binding ResetDefaultsCommand}" />
+                <TextBlock Text="{Binding SaveStatus}"
+                           Foreground="{StaticResource SuccessBrush}"
+                           VerticalAlignment="Center"
+                           Margin="12,0,0,0" />
+            </StackPanel>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

@@ -22,7 +22,7 @@ public enum GgmlType : uint
     IQ2_XXS = 16, IQ2_XS = 17, IQ3_XXS = 18, IQ1_S = 19, IQ4_NL = 20,
     IQ3_S = 21, IQ2_S = 22, IQ4_XS = 23,
     I8 = 24, I16 = 25, I32 = 26, I64 = 27, F64 = 28, IQ1_M = 29, BF16 = 30,
-    TQ1_0 = 34, TQ2_0 = 35,
+    TQ1_0 = 34, TQ2_0 = 35, MXFP4 = 39,
 }
 
 /// <summary>One entry in a GGUF file's tensor directory (name/shape/type/offset only — no data).</summary>

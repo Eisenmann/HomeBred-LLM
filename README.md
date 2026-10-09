@@ -41,6 +41,8 @@ No background services. No terminal. No config files.
 | 📊 | **Live Analytics** | GPU utilization, VRAM used/total, GPU temperature, CPU, RAM, tokens/sec, and time-to-first-token — sampled every 5 seconds |
 | 🗑️ | **Analytics Cleanup** | Delete metrics for any model over any date range without touching the model itself |
 | 💬 | **Streaming Chat** | Token-by-token streaming output, multiple named sessions, per-message TPS and latency stats |
+| 🧠 | **Tiered memory** | Run models larger than VRAM: per-model VRAM/RAM budgets, weights split across VRAM → RAM → memory-mapped disk, MoE hot-expert warm tier learned from real routing, live rebalancing — see [docs/tiered-memory-architecture.md](docs/tiered-memory-architecture.md) |
+| 🧮 | **Capacity Calculator** | "How big a model can I run, and how fast?" per strategy (GPU / GPU+RAM / +disk), plus "can I run this file?" with suggestions; fit badges in the Model Library |
 | 🔌 | **Local API Endpoint** | Optional, opt-in per model — exposes OpenAI-compatible `POST /v1/chat/completions` (streaming supported) and `POST /v1/embeddings` on a configurable port, bound to `127.0.0.1` only |
 
 ---
